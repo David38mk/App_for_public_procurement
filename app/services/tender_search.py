@@ -22,6 +22,8 @@ ROW_SELECTORS = [
     "a.show-documents[data-rel]",
     "a[data-rel][class*='show-documents']",
     "table a[data-rel]",
+    "table tbody tr",
+    "table tr",
 ]
 
 
@@ -32,6 +34,8 @@ class TenderRow:
     institution: str
     deadline: str
     dossier_id: str
+    source_page: int = 1
+    row_text: str = ""
 
 
 def setup_driver(headless: bool, download_dir: str) -> Chrome:
@@ -151,11 +155,57 @@ def fetch_tenders_via_js(driver: Chrome) -> list[dict]:
         title: cell(1),
         institution: cell(2),
         deadline: cell(3),
+        row_text: tds.map(td => (td.innerText || "").trim()).join(" | "),
       });
     });
+    if (out.length === 0) {
+      const rows = document.querySelectorAll("table tbody tr, table tr");
+      let idx = 1;
+      rows.forEach((tr) => {
+        const tds = Array.from(tr.querySelectorAll("td"));
+        if (tds.length < 3) {
+          return;
+        }
+        const cell = i => (tds[i] ? tds[i].innerText.trim() : "");
+        const title = cell(1) || cell(0);
+        const institution = cell(2) || "";
+        const deadline = cell(3) || "";
+        const dossier = (tr.getAttribute("data-rel") || "").trim();
+        if (!(title || institution || deadline)) {
+          return;
+        }
+        out.push({
+          index: idx++,
+          dossier: dossier || "",
+          title,
+          institution,
+          deadline,
+          row_text: tds.map(td => (td.innerText || "").trim()).join(" | "),
+        });
+      });
+    }
     return out;
     """
     return driver.execute_script(js)
+
+
+def has_any_result_rows(driver: Chrome) -> bool:
+    js = r"""
+    const links = document.querySelectorAll(
+      "a.show-documents[data-rel], a[data-rel][class*='show-documents'], table a[data-rel]"
+    );
+    if (links.length > 0) return true;
+    const rows = document.querySelectorAll("table tbody tr, table tr");
+    for (const tr of rows) {
+      const tds = tr.querySelectorAll("td");
+      if (tds.length >= 3) return true;
+    }
+    return false;
+    """
+    try:
+        return bool(driver.execute_script(js))
+    except Exception:
+        return False
 
 
 def save_debug_snapshot(
@@ -183,6 +233,8 @@ def wait_for_result_rows(
     snapshot_dir: str | None = None,
 ) -> bool:
     for attempt in range(1, attempts + 1):
+        if has_any_result_rows(driver):
+            return True
         for selector in ROW_SELECTORS:
             try:
                 WebDriverWait(driver, 5).until(
@@ -216,11 +268,126 @@ def collect_tenders(driver: Chrome, wait: WebDriverWait, log: Callable[[str], No
             institution=item["institution"],
             deadline=item["deadline"],
             dossier_id=item["dossier"],
+            source_page=1,
+            row_text=item.get("row_text", ""),
         )
         for item in data
     ]
     log(f"Found {len(rows)} results.")
     return rows
+
+
+def click_next_page(driver: Chrome, wait: WebDriverWait, log: Callable[[str], None]) -> bool:
+    xpaths = [
+        "//li[contains(@class,'next') and not(contains(@class,'disabled'))]/a",
+        "//a[contains(@aria-label,'Next') and not(contains(@class,'disabled'))]",
+        "//a[contains(.,'Next') and not(contains(@class,'disabled'))]",
+        "//a[contains(.,'Следна') and not(contains(@class,'disabled'))]",
+        "//button[contains(.,'Next') and not(@disabled)]",
+        "//button[contains(.,'Следна') and not(@disabled)]",
+    ]
+    for xp in xpaths:
+        try:
+            btn = WebDriverWait(driver, 3).until(EC.element_to_be_clickable((By.XPATH, xp)))
+            js_click(driver, btn)
+            time.sleep(1.0)
+            return True
+        except Exception:
+            continue
+    log("INFO: No next-page control found or no more pages.")
+    return False
+
+
+def dedupe_tenders(rows: list[TenderRow]) -> list[TenderRow]:
+    seen: set[str] = set()
+    out: list[TenderRow] = []
+    for row in rows:
+        key = (row.dossier_id or "").strip()
+        if not key:
+            key = f"{row.title}|{row.institution}|{row.deadline}"
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(row)
+    return out
+
+
+def collect_all_pages(
+    driver: Chrome,
+    wait: WebDriverWait,
+    log: Callable[[str], None],
+    max_pages: int = 10,
+    snapshot_dir: str | None = None,
+) -> list[TenderRow]:
+    all_rows: list[TenderRow] = []
+    page = 1
+    prev_signature: tuple[str, ...] | None = None
+    while page <= max_pages:
+        wait_for_result_rows(
+            driver,
+            wait,
+            log,
+            attempts=2,
+            base_delay_sec=1.0,
+            snapshot_dir=snapshot_dir,
+        )
+        page_rows = collect_tenders(driver, wait, log)
+        for r in page_rows:
+            r.source_page = page
+        log(f"INFO: Page {page} rows: {len(page_rows)}")
+        all_rows.extend(page_rows)
+
+        current_signature = tuple((r.dossier_id or "") for r in page_rows[:5])
+        if prev_signature is not None and current_signature and current_signature == prev_signature:
+            log("INFO: Pagination appears stuck on the same page data. Stopping.")
+            break
+        prev_signature = current_signature
+
+        # If page 1 has rows but later page is empty, stop immediately.
+        if page > 1 and len(page_rows) == 0:
+            log("INFO: Empty page reached after first page. Stopping pagination.")
+            break
+
+        if page >= max_pages:
+            log(f"INFO: Reached max_pages={max_pages}.")
+            break
+        if not click_next_page(driver, wait, log):
+            break
+        page += 1
+
+    unique_rows = dedupe_tenders(all_rows)
+    log(
+        f"INFO: Pagination complete. pages={page}, total_rows={len(all_rows)}, unique_rows={len(unique_rows)}"
+    )
+    return unique_rows
+
+
+def find_dossier_on_pages(
+    driver: Chrome,
+    wait: WebDriverWait,
+    dossier_id: str,
+    log: Callable[[str], None],
+    max_pages: int = 10,
+) -> bool:
+    page = 1
+    while page <= max_pages:
+        try:
+            show = WebDriverWait(driver, 4).until(
+                EC.presence_of_element_located(
+                    (By.XPATH, f"//a[contains(@class,'show-documents') and @data-rel='{dossier_id}']")
+                )
+            )
+            js_click(driver, show)
+            return True
+        except Exception:
+            pass
+
+        if page >= max_pages:
+            break
+        if not click_next_page(driver, wait, log):
+            break
+        page += 1
+    return False
 
 
 def click_show_for_dossier(driver: Chrome, wait: WebDriverWait, dossier_id: str) -> None:

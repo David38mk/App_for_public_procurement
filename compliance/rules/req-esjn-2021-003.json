@@ -1,0 +1,20 @@
+{
+  "rule_id": "RULE-ESJN-2021-003",
+  "source_file": "Упатства/Priracnik-za-koristenje-na-ESJN-za-Dogovorni-organi-nov2021.pdf",
+  "source_section": "Draft citation: pages 25, 4, 13 (keyword hits: најава, корис, лозин)",
+  "source_page": 25,
+  "effective_from": "2021-01-08",
+  "effective_to": null,
+  "rule_type": "authorization",
+  "severity": "high",
+  "condition": "Requirement REQ-ESJN-2021-003 applies to auth_audit flow.",
+  "action": "Actions requiring authenticated role must be gated and logged.",
+  "error_message": "REQ-ESJN-2021-003 is not satisfied.",
+  "app_module": "auth_audit",
+  "test_case_id": "TC-REQ-003",
+  "approval_state": "draft",
+  "approved_by": null,
+  "approved_at": null,
+  "version": "0.1.0",
+  "notes": "Draft rule generated from machine-derived citation matrix. Requires SME + legal validation before any promotion."
+}

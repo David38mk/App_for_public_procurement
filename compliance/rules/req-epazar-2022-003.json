@@ -1,0 +1,20 @@
+{
+  "rule_id": "RULE-EPAZAR-2022-003",
+  "source_file": "Упатства/Корисничко-упатство-за-Економски-оператори-еПазар.pdf",
+  "source_section": "Draft citation: pages 14, 20, 22 (support contact and corrective step guidance candidate)",
+  "source_page": 14,
+  "effective_from": "2022-02-21",
+  "effective_to": null,
+  "rule_type": "workflow_gate",
+  "severity": "low",
+  "condition": "Requirement REQ-EPAZAR-2022-003 applies to ux_errors flow.",
+  "action": "App must provide corrective guidance for failed steps and keep retry-safe state.",
+  "error_message": "REQ-EPAZAR-2022-003 is not satisfied.",
+  "app_module": "ux_errors",
+  "test_case_id": "TC-REQ-009",
+  "approval_state": "draft",
+  "approved_by": null,
+  "approved_at": null,
+  "version": "0.1.0",
+  "notes": "Draft rule: manual follow-up extraction found candidate pages 14/20/22 for corrective guidance; requires SME+legal confirmation before promotion."
+}

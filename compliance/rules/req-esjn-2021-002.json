@@ -1,0 +1,20 @@
+{
+  "rule_id": "RULE-ESJN-2021-002",
+  "source_file": "Упатства/Priracnik-za-koristenje-na-ESJN-za-Dogovorni-organi-nov2021.pdf",
+  "source_section": "Draft citation: pages 4, 9, 11 (keyword hits: презем, документ)",
+  "source_page": 4,
+  "effective_from": "2021-01-08",
+  "effective_to": null,
+  "rule_type": "document_requirement",
+  "severity": "low",
+  "condition": "Requirement REQ-ESJN-2021-002 applies to download flow.",
+  "action": "App must support document retrieval from dossier with clear error states and retries.",
+  "error_message": "REQ-ESJN-2021-002 is not satisfied.",
+  "app_module": "download",
+  "test_case_id": "TC-REQ-002",
+  "approval_state": "draft",
+  "approved_by": null,
+  "approved_at": null,
+  "version": "0.1.0",
+  "notes": "Draft rule generated from machine-derived citation matrix. Requires SME + legal validation before any promotion."
+}

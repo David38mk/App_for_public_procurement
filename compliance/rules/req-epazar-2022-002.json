@@ -1,0 +1,20 @@
+{
+  "rule_id": "RULE-EPAZAR-2022-002",
+  "source_file": "Упатства/Корисничко-упатство-за-Економски-оператори-еПазар.pdf",
+  "source_section": "Draft citation: pages 17, 15, 18 (keyword hits: задолж, полиња, внес)",
+  "source_page": 17,
+  "effective_from": "2022-02-21",
+  "effective_to": null,
+  "rule_type": "validation",
+  "severity": "medium",
+  "condition": "Requirement REQ-EPAZAR-2022-002 applies to validation_engine flow.",
+  "action": "For ePazar, app must validate mandatory input set before action execution.",
+  "error_message": "REQ-EPAZAR-2022-002 is not satisfied.",
+  "app_module": "validation_engine",
+  "test_case_id": "TC-REQ-008",
+  "approval_state": "draft",
+  "approved_by": null,
+  "approved_at": null,
+  "version": "0.1.0",
+  "notes": "Draft rule generated from machine-derived citation matrix. Requires SME + legal validation before any promotion."
+}

@@ -57,10 +57,31 @@ def extract_placeholders_from_docx(template_path: str) -> list[str]:
     return sorted(placeholders)
 
 
+def validate_required_template_values(
+    template_path: str,
+    values: dict[str, str],
+    required_fields: list[str] | None = None,
+) -> list[str]:
+    placeholders = extract_placeholders_from_docx(template_path)
+    targets = required_fields if required_fields is not None else placeholders
+    missing: list[str] = []
+
+    for field in targets:
+        raw = values.get(field, "")
+        if not str(raw).strip():
+            missing.append(field)
+
+    return sorted(set(missing))
+
+
 def render_docx_template(template_path: str, output_path: str, values: dict[str, str]) -> None:
     src = Path(template_path)
     dst = Path(output_path)
     dst.parent.mkdir(parents=True, exist_ok=True)
+
+    missing = validate_required_template_values(str(src), values)
+    if missing:
+        raise ValueError("Missing required template values: " + ", ".join(missing))
 
     with zipfile.ZipFile(src, "r") as zin:
         target_entries = set(_iter_target_xml_entries(zin))

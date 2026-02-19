@@ -1,0 +1,95 @@
+﻿{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Procurement Rule Schema",
+  "type": "object",
+  "required": [
+    "rule_id",
+    "source_file",
+    "source_section",
+    "effective_from",
+    "rule_type",
+    "severity",
+    "condition",
+    "action",
+    "approval_state",
+    "version"
+  ],
+  "properties": {
+    "rule_id": {
+      "type": "string",
+      "pattern": "^RULE-[A-Z0-9-]+$"
+    },
+    "source_file": {
+      "type": "string"
+    },
+    "source_section": {
+      "type": "string"
+    },
+    "source_page": {
+      "type": ["integer", "null"],
+      "minimum": 1
+    },
+    "effective_from": {
+      "type": "string",
+      "format": "date"
+    },
+    "effective_to": {
+      "type": ["string", "null"],
+      "format": "date"
+    },
+    "rule_type": {
+      "type": "string",
+      "enum": [
+        "validation",
+        "workflow_gate",
+        "authorization",
+        "document_requirement",
+        "deadline",
+        "audit"
+      ]
+    },
+    "severity": {
+      "type": "string",
+      "enum": ["low", "medium", "high", "critical"]
+    },
+    "condition": {
+      "type": "string"
+    },
+    "action": {
+      "type": "string"
+    },
+    "error_message": {
+      "type": "string"
+    },
+    "app_module": {
+      "type": "string"
+    },
+    "test_case_id": {
+      "type": "string"
+    },
+    "approval_state": {
+      "type": "string",
+      "enum": [
+        "draft",
+        "pending_sme",
+        "pending_legal",
+        "approved",
+        "deprecated"
+      ]
+    },
+    "approved_by": {
+      "type": ["string", "null"]
+    },
+    "approved_at": {
+      "type": ["string", "null"],
+      "format": "date-time"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "notes": {
+      "type": "string"
+    }
+  }
+}

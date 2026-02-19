@@ -1,0 +1,20 @@
+{
+  "rule_id": "RULE-ESJN-2021-006",
+  "source_file": "Упатства/Priracnik-za-koristenje-na-ESJN-za-Ekonomski-operatori-nov2021.pdf",
+  "source_section": "Draft citation: pages 32, 9, 19 (keyword hits: потврд, број)",
+  "source_page": 32,
+  "effective_from": "2021-01-18",
+  "effective_to": null,
+  "rule_type": "audit",
+  "severity": "medium",
+  "condition": "Requirement REQ-ESJN-2021-006 applies to audit_log flow.",
+  "action": "App must capture and persist submission evidence metadata for audit traceability.",
+  "error_message": "REQ-ESJN-2021-006 is not satisfied.",
+  "app_module": "audit_log",
+  "test_case_id": "TC-REQ-006",
+  "approval_state": "draft",
+  "approved_by": null,
+  "approved_at": null,
+  "version": "0.1.0",
+  "notes": "Draft rule generated from machine-derived citation matrix. Requires SME + legal validation before any promotion."
+}

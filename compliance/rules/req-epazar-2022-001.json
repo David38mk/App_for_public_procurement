@@ -1,0 +1,20 @@
+{
+  "rule_id": "RULE-EPAZAR-2022-001",
+  "source_file": "Упатства/Корисничко-упатство-за-Економски-оператори-еПазар.pdf",
+  "source_section": "Draft citation: pages 7, 11, 13 (keyword hits: епазар, оператор, каталог)",
+  "source_page": 7,
+  "effective_from": "2022-02-21",
+  "effective_to": null,
+  "rule_type": "workflow_gate",
+  "severity": "medium",
+  "condition": "Requirement REQ-EPAZAR-2022-001 applies to workflow_router flow.",
+  "action": "App must distinguish ePazar-specific process from ESJN tender flow in UX and validation logic.",
+  "error_message": "REQ-EPAZAR-2022-001 is not satisfied.",
+  "app_module": "workflow_router",
+  "test_case_id": "TC-REQ-007",
+  "approval_state": "draft",
+  "approved_by": null,
+  "approved_at": null,
+  "version": "0.1.0",
+  "notes": "Draft rule generated from machine-derived citation matrix. Requires SME + legal validation before any promotion."
+}

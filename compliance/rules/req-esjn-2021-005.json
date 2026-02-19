@@ -1,0 +1,20 @@
+{
+  "rule_id": "RULE-ESJN-2021-005",
+  "source_file": "Упатства/Priracnik-za-koristenje-na-ESJN-za-Ekonomski-operatori-nov2021.pdf",
+  "source_section": "Draft citation: pages 33, 59, 66 (keyword hits: прикач, прилог, upload)",
+  "source_page": 33,
+  "effective_from": "2021-01-18",
+  "effective_to": null,
+  "rule_type": "document_requirement",
+  "severity": "high",
+  "condition": "Requirement REQ-ESJN-2021-005 applies to workspace_pack flow.",
+  "action": "App must produce a dossier workspace with deterministic file naming and completeness checks.",
+  "error_message": "REQ-ESJN-2021-005 is not satisfied.",
+  "app_module": "workspace_pack",
+  "test_case_id": "TC-REQ-005",
+  "approval_state": "draft",
+  "approved_by": null,
+  "approved_at": null,
+  "version": "0.1.0",
+  "notes": "Draft rule generated from machine-derived citation matrix. Requires SME + legal validation before any promotion."
+}

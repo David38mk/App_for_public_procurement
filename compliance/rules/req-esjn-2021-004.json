@@ -1,0 +1,20 @@
+{
+  "rule_id": "RULE-ESJN-2021-004",
+  "source_file": "Упатства/Priracnik-za-koristenje-na-ESJN-za-Ekonomski-operatori-nov2021.pdf",
+  "source_section": "Draft citation: pages 69, 5, 8 (keyword hits: понуда, поднес, услов)",
+  "source_page": 69,
+  "effective_from": "2021-01-18",
+  "effective_to": null,
+  "rule_type": "document_requirement",
+  "severity": "high",
+  "condition": "Requirement REQ-ESJN-2021-004 applies to doc_builder flow.",
+  "action": "Document builder must enforce required fields before generating final submission pack.",
+  "error_message": "REQ-ESJN-2021-004 is not satisfied.",
+  "app_module": "doc_builder",
+  "test_case_id": "TC-REQ-004",
+  "approval_state": "draft",
+  "approved_by": null,
+  "approved_at": null,
+  "version": "0.1.0",
+  "notes": "Draft rule generated from machine-derived citation matrix. Requires SME + legal validation before any promotion."
+}

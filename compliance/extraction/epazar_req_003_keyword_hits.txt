@@ -1,0 +1,2 @@
+pdf: C:\Users\rabota\Desktop\App for public procurements\Упатства\Корисничко-упатство-за-Економски-оператори-еПазар.pdf
+hit_pages: 
