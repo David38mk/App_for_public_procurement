@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.pyc
+
+# Local runtime outputs
+downloads/
+generated_docs/
+
+# Local review backups (large, generated)
+review/archive_before_*/
+review/archive_before_cleanup_*/
+review/archive_before_naming_standardization_*/
+review/archive_before_cyrillic_naming_standardization_*/
+
+# Debug artifacts
+*.log
+*.tmp
+
