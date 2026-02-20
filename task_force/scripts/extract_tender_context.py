@@ -81,6 +81,7 @@ INSTITUTION_BLOCKLIST = (
     "\u0443\u043f\u0440\u0430\u0432\u0430 \u0437\u0430 \u0458\u0430\u0432\u043d\u0438 \u043f\u0440\u0438\u0445\u043e\u0434\u0438",
     "\u0434\u0430\u043d\u043e\u0446\u0438",
 )
+W_NS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 
 
 @dataclass
@@ -1004,6 +1005,79 @@ def build_elegant_context_lines_v2(
     return lines
 
 
+def normalize_csv_cell(value: Any, max_len: int = 2400) -> str:
+    txt = str(value or "")
+    txt = re.sub(r"[\r\n\t]+", " ", txt)
+    txt = re.sub(r"\s+", " ", txt).strip()
+    return txt[:max_len]
+
+
+def sanitize_rows_for_csv(rows: list[dict[str, Any]], max_len: int = 2400) -> list[dict[str, str]]:
+    out: list[dict[str, str]] = []
+    for row in rows:
+        out.append({str(k): normalize_csv_cell(v, max_len=max_len) for k, v in row.items()})
+    return out
+
+
+def write_context_docx_from_template(
+    template_path: Path,
+    output_path: Path,
+    context_fields: dict[str, dict[str, str]],
+) -> bool:
+    if not template_path.exists():
+        return False
+
+    label_to_field = {
+        "Име на институција": "institution_name",
+        "Тип на постапка": "procedure_type",
+        "Предмет на набавка": "subject_of_procurement",
+        "Посебни начини за доделување на договорот за јавна набавка": "award_method_notes",
+        "Цена на понудата": "offer_price_notes",
+        "Елементи на понудата": "offer_elements",
+        "Критериуми за утврдување на способност на понудувачите": "bidder_eligibility_criteria",
+        "Причини за исклучување од постапката": "exclusion_grounds",
+        "Услови за квалитативен избор": "qualitative_selection_conditions",
+        "Техничка и професионална способност": "technical_professional_ability",
+        "Стандарди за системи за квалитет": "quality_standards",
+        "КРИТЕРИУМ ЗА ИЗБОР НА НАЈПОВОЛНА ПОНУДА": "best_offer_criterion",
+    }
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(template_path, "r") as zin:
+        with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED) as zout:
+            for item in zin.infolist():
+                data = zin.read(item.filename)
+                if item.filename == "word/document.xml":
+                    root = ET.fromstring(data)
+                    for tr in root.findall(f".//{W_NS}tr"):
+                        tcs = tr.findall(f"{W_NS}tc")
+                        if len(tcs) < 2:
+                            continue
+                        left_text = "".join(
+                            (t.text or "")
+                            for t in tcs[0].findall(f".//{W_NS}t")
+                        ).strip()
+                        field_key = label_to_field.get(left_text)
+                        if not field_key:
+                            continue
+                        value = normalize_csv_cell(
+                            context_fields.get(field_key, {}).get("value", MANUAL_REVIEW_FLAG), max_len=520
+                        )
+                        right_tc = tcs[1]
+                        paragraph = right_tc.find(f"{W_NS}p")
+                        if paragraph is None:
+                            paragraph = ET.SubElement(right_tc, f"{W_NS}p")
+                        for node in list(paragraph):
+                            paragraph.remove(node)
+                        run = ET.SubElement(paragraph, f"{W_NS}r")
+                        text = ET.SubElement(run, f"{W_NS}t")
+                        text.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
+                        text.text = value
+                    data = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+                zout.writestr(item, data)
+    return True
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Extract per-tender context and upload template rows from tender documents."
@@ -1012,11 +1086,17 @@ def main() -> int:
     parser.add_argument("--out-dir", default="task_force/out/tender_context", help="Output directory.")
     parser.add_argument("--max-files", type=int, default=20, help="Max files to process.")
     parser.add_argument("--tender-id", default="", help="Optional tender id filter, e.g. 09362-2025.")
+    parser.add_argument(
+        "--context-template",
+        default="context template.docx",
+        help="DOCX template used for tender context export.",
+    )
     args = parser.parse_args()
 
     root = Path.cwd()
     input_dir = (root / args.input_dir).resolve()
     out_dir = (root / args.out_dir).resolve()
+    context_template_path = (root / args.context_template).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%SZ")
@@ -1159,14 +1239,16 @@ def main() -> int:
         checklist_docx_path = out_dir / f"simple_checklist_{tender_slug}_{stamp}.docx"
         form_docx_path = out_dir / f"simple_form_{tender_slug}_{stamp}.docx"
 
+        safe_upload_rows = sanitize_rows_for_csv(upload_rows, max_len=600)
         json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         with csv_path.open("w", encoding="utf-8-sig", newline="") as fh:
             writer = csv.DictWriter(fh, fieldnames=["file", "tag", "term", "source_page", "snippet"])
             writer.writeheader()
-            writer.writerows(upload_rows)
+            writer.writerows(safe_upload_rows)
         write_upload_hints_xlsx(upload_rows, xlsx_path)
 
         req_rows = build_requirements_template_rows(main_doc.path.name, upload_rows, sections, deduped_tech_spec_hits)
+        safe_req_rows = sanitize_rows_for_csv(req_rows, max_len=2400)
         with requirements_path.open("w", encoding="utf-8-sig", newline="") as fh:
             writer = csv.DictWriter(
                 fh,
@@ -1186,7 +1268,7 @@ def main() -> int:
                 ],
             )
             writer.writeheader()
-            writer.writerows(req_rows)
+            writer.writerows(safe_req_rows)
 
         checklist_lines = build_simple_checklist_lines(
             tender_id=tender_id,
@@ -1207,7 +1289,8 @@ def main() -> int:
             tech_spec_hits=deduped_tech_spec_hits,
         )
         md_path.write_text("\n".join(context_lines), encoding="utf-8")
-        write_simple_checklist_docx(context_lines, context_docx_path)
+        if not write_context_docx_from_template(context_template_path, context_docx_path, context_fields):
+            write_simple_checklist_docx(context_lines, context_docx_path)
 
         outputs.append(
             {
