@@ -253,7 +253,7 @@ class TenderSearchFrame(ttk.Frame):
 
         threading.Thread(target=work, daemon=True).start()
 
-    def on_extract_tender_context(self, auto_open_hints: bool = False, notify_errors: bool = False):
+    def on_extract_tender_context(self, auto_open_context_docx: bool = False, notify_errors: bool = False):
         script_path = Path.cwd() / "task_force" / "scripts" / "extract_tender_context.py"
         if not script_path.exists():
             self.log(f"ERROR: Missing context script: {script_path}")
@@ -272,6 +272,8 @@ class TenderSearchFrame(ttk.Frame):
                 "task_force/out/tender_context",
                 "--max-files",
                 "12",
+                "--context-template",
+                "task_force/templates/context_template_v2.docx",
             ]
             active_tender_id = self._resolve_active_tender_id_from_selection_or_cache()
             if active_tender_id:
@@ -299,15 +301,48 @@ class TenderSearchFrame(ttk.Frame):
                         messagebox.showerror("Extract failed", "Tender context extraction failed. Check logs.")
                     return
                 self.log("INFO: Tender context extraction completed.")
-                if auto_open_hints:
-                    self.on_open_latest_upload_hints(notify_if_missing=False)
-                    self.on_open_latest_requirements_template(notify_if_missing=False)
+                if auto_open_context_docx:
+                    self.on_open_latest_context_docx(notify_if_missing=False)
             except Exception as exc:
                 self.log(f"ERROR: Context extraction failed: {exc}")
                 if notify_errors:
                     messagebox.showerror("Extract failed", str(exc))
 
         threading.Thread(target=work, daemon=True).start()
+
+    def on_open_latest_context_docx(self, notify_if_missing: bool = True):
+        out_dir = Path.cwd() / "task_force" / "out" / "tender_context"
+        tender_id = self._resolve_active_tender_id_from_selection_or_cache()
+        files: list[Path] = []
+        if tender_id:
+            slug = tender_id.replace("-", "_")
+            files = sorted(
+                out_dir.glob(f"tender_context_{slug}_*.docx"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+        if not files:
+            files = sorted(
+                out_dir.glob("tender_context_*.docx"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+        if not files:
+            self.log(f"INFO: No tender context DOCX found in: {out_dir}")
+            if notify_if_missing:
+                messagebox.showinfo("No context DOCX", f"No context DOCX found in:\n{out_dir}")
+            return
+        latest = files[0]
+        try:
+            if os.name == "nt":
+                os.startfile(str(latest))
+            else:
+                messagebox.showinfo("Latest context DOCX", str(latest))
+            self.log(f"INFO: Opened context DOCX: {latest.name}")
+        except Exception as exc:
+            self.log(f"ERROR: Could not open context DOCX: {exc}")
+            if notify_if_missing:
+                messagebox.showerror("Open failed", str(exc))
 
     @staticmethod
     def _filter_context_stdout_lines(lines: list[str], tender_id: str | None) -> list[str]:
@@ -907,7 +942,7 @@ class TenderSearchFrame(ttk.Frame):
                 if inferred_tid:
                     self.last_active_tender_id = inferred_tid
                     self.log(f"INFO: Active tender inferred from recent downloads: {inferred_tid}")
-                self.on_extract_tender_context(auto_open_hints=True, notify_errors=False)
+                self.on_extract_tender_context(auto_open_context_docx=True, notify_errors=False)
             except Exception as exc:
                 self.log(f"ERROR: Download failed: {exc}")
                 guidance = build_corrective_guidance(

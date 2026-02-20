@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 from __future__ import annotations
 
 import argparse
@@ -71,6 +71,8 @@ TARGET_SECTIONS = [
     "5.1",
     "5.2",
     "5.3",
+    "6",
+    "6.1",
 ]
 
 MANUAL_REVIEW_FLAG = "\u041f\u0440\u043e\u0432\u0435\u0440\u0438 \u0440\u0430\u0447\u043d\u043e"
@@ -257,24 +259,28 @@ def extract_target_sections(text: str) -> dict[str, dict[str, str]]:
             chosen = candidates[0]
         chosen_idx_by_sec[sec] = chosen
 
+    heading_idx_lookup = {idx: sec for idx, sec, _ in headings}
     sorted_targets = sorted(((idx, sec) for sec, idx in chosen_idx_by_sec.items()), key=lambda x: x[0])
     out: dict[str, dict[str, str]] = {}
-    for i, (idx, sec) in enumerate(sorted_targets):
+    for idx, sec in sorted_targets:
         next_idx = len(lines)
-        if i + 1 < len(sorted_targets):
-            next_idx = sorted_targets[i + 1][0]
+        for probe in range(idx + 1, len(lines)):
+            if probe in heading_idx_lookup:
+                next_idx = probe
+                break
         block = lines[idx:next_idx]
         if not block:
             continue
         heading = block[0]
-        body = "\n".join(block)
+        body_lines = block[1:] if len(block) > 1 else block
+        body = "\n".join(body_lines) if body_lines else heading
         out[sec] = {"heading": heading, "text": body[:6000]}
     return out
 
 
 def extract_bullet_documents(section_text: str) -> list[str]:
     lines = [ln.strip() for ln in section_text.splitlines() if ln.strip()]
-    marker_re = re.compile(r"^(?:[-\u2022\u25aa\u25cf\u2023\uf0ad\u25cf\uf0b7\uf0ad]|)\s*(.+)$")
+    marker_re = re.compile(r"^(?:[-\u2022\u25aa\u25cf\u2023\uf0ad\u25cf\uf0b7\uf0ad]|ï€­)\s*(.+)$")
     bullets: list[str] = []
     current = ""
     for line in lines:
@@ -425,10 +431,10 @@ def write_simple_checklist_docx(lines: list[str], path: Path) -> None:
             plain_lines.append(line[3:].strip())
             continue
         if line.startswith("- [ ] "):
-            plain_lines.append("☐ " + line[6:].strip())
+            plain_lines.append("â˜ " + line[6:].strip())
             continue
         if line.startswith("- "):
-            plain_lines.append("• " + line[2:].strip())
+            plain_lines.append("â€¢ " + line[2:].strip())
             continue
         plain_lines.append(line)
 
@@ -560,7 +566,7 @@ def write_simple_form_docx(rows: list[dict[str, str]], tender_id: str, path: Pat
     lines = [f"Upload Form - {tender_id}", ""]
     for row in rows:
         lines.append(
-            f"☐ [{row.get('item_no','')}] {row.get('section_code','')} {row.get('requirement_id','')} - {row.get('checklist_item','')}"
+            f"â˜ [{row.get('item_no','')}] {row.get('section_code','')} {row.get('requirement_id','')} - {row.get('checklist_item','')}"
         )
         lines.append("    Provided: ________")
         lines.append("    Attached file: ________")
@@ -648,7 +654,7 @@ def detect_procedure_type(section_15_text: str) -> str:
         return "Поедноставена отворена постапка"
     if "отворена постапка" in low:
         return "Отворена постапка"
-    if "постапка од мала вредност" in low:
+    if "постапка од мала вредност" in low or "набавка од мала вредност" in low:
         return "Набавка од мала вредност"
     return compact_text(section_15_text, 180) or "Провери дел 1.5."
 
@@ -659,11 +665,30 @@ def detect_procedure_type_from_full_text(full_text: str, section_15_text: str) -
         return "Поедноставена отворена постапка"
     if "отворена постапка" in merged:
         return "Отворена постапка"
-    if "набавка од мала вредност" in merged:
+    if "набавка од мала вредност" in merged or "постапка од мала вредност" in merged:
         return "Набавка од мала вредност"
     if "конкурентна постапка" in merged:
         return "Конкурентна постапка"
     return detect_procedure_type(section_15_text)
+
+
+def detect_subject_from_full_text(full_text: str) -> str:
+    normalized = normalize_text(full_text)[:16000]
+    patterns = [
+        r"предмет\s+на\s+постапката[^\n]{0,180}",
+        r"предмет\s+на\s+набавката[^\n]{0,180}",
+        r"предмет\s+на\s+договор[^\n]{0,180}",
+    ]
+    for pat in patterns:
+        m = re.search(pat, normalized, flags=re.IGNORECASE)
+        if not m:
+            continue
+        candidate = first_sentence(m.group(0), 220)
+        low = candidate.lower()
+        if "корупц" in low or "општи мерки" in low or "набавка" not in low:
+            continue
+        return candidate
+    return ""
 
 
 def pick_section_text_with_keywords(
@@ -689,67 +714,75 @@ def build_elegant_context_lines(
     sections: dict[str, dict[str, str]],
     tech_spec_hits: list[dict[str, Any]],
 ) -> list[str]:
-    sec_13 = pick_section_text_with_keywords(sections, ["1.3"], ["предмет", "набавка"])
-    sec_15 = pick_section_text_with_keywords(sections, ["1.5"], ["постапка", "отворена"])
-    sec_161 = pick_section_text_with_keywords(sections, ["1.6.1"], ["аукција", "електронска"])
-    sec_34 = pick_section_text_with_keywords(sections, ["3.4"], ["цена", "понуда"])
+    sec_13 = pick_section_text_with_keywords(sections, ["1.3"], ["Ð¿Ñ€ÐµÐ´Ð¼ÐµÑ‚", "Ð½Ð°Ð±Ð°Ð²ÐºÐ°"])
+    sec_15 = pick_section_text_with_keywords(sections, ["1.5"], ["Ð¿Ð¾ÑÑ‚Ð°Ð¿ÐºÐ°", "Ð¾Ñ‚Ð²Ð¾Ñ€ÐµÐ½Ð°"])
+    sec_161 = pick_section_text_with_keywords(sections, ["1.6.1"], ["Ð°ÑƒÐºÑ†Ð¸Ñ˜Ð°", "ÐµÐ»ÐµÐºÑ‚Ñ€Ð¾Ð½ÑÐºÐ°"])
+    sec_34 = pick_section_text_with_keywords(sections, ["3.4"], ["Ñ†ÐµÐ½Ð°", "Ð¿Ð¾Ð½ÑƒÐ´Ð°"])
     sec_310 = pick_section_text_with_keywords(
-        sections, ["3.10", "4.3"], ["содржина на понудата", "елементи", "финансиска понуда"]
+        sections, ["3.10", "4.3"], ["ÑÐ¾Ð´Ñ€Ð¶Ð¸Ð½Ð° Ð½Ð° Ð¿Ð¾Ð½ÑƒÐ´Ð°Ñ‚Ð°", "ÐµÐ»ÐµÐ¼ÐµÐ½Ñ‚Ð¸", "Ñ„Ð¸Ð½Ð°Ð½ÑÐ¸ÑÐºÐ° Ð¿Ð¾Ð½ÑƒÐ´Ð°"]
     )
     sec_51 = pick_section_text_with_keywords(
-        sections, ["5.1", "4.1"], ["критериуми", "утврдување способност", "способност"]
+        sections, ["5.1", "4.1"], ["ÐºÑ€Ð¸Ñ‚ÐµÑ€Ð¸ÑƒÐ¼Ð¸", "ÑƒÑ‚Ð²Ñ€Ð´ÑƒÐ²Ð°ÑšÐµ ÑÐ¿Ð¾ÑÐ¾Ð±Ð½Ð¾ÑÑ‚", "ÑÐ¿Ð¾ÑÐ¾Ð±Ð½Ð¾ÑÑ‚"]
     )
     sec_42 = pick_section_text_with_keywords(
-        sections, ["4.2", "5.2"], ["причини за исклучување", "исклучување"]
+        sections, ["4.2", "5.2"], ["Ð¿Ñ€Ð¸Ñ‡Ð¸Ð½Ð¸ Ð·Ð° Ð¸ÑÐºÐ»ÑƒÑ‡ÑƒÐ²Ð°ÑšÐµ", "Ð¸ÑÐºÐ»ÑƒÑ‡ÑƒÐ²Ð°ÑšÐµ"]
     )
     sec_43 = pick_section_text_with_keywords(
-        sections, ["4.3", "5.3"], ["квалитативен избор", "услови"]
+        sections, ["4.3", "5.3"], ["ÐºÐ²Ð°Ð»Ð¸Ñ‚Ð°Ñ‚Ð¸Ð²ÐµÐ½ Ð¸Ð·Ð±Ð¾Ñ€", "ÑƒÑÐ»Ð¾Ð²Ð¸"]
     )
     sec_432 = pick_section_text_with_keywords(
-        sections, ["4.3.2", "5.3.2"], ["техничка", "професионална способност"]
+        sections, ["4.3.2", "5.3.2"], ["Ñ‚ÐµÑ…Ð½Ð¸Ñ‡ÐºÐ°", "Ð¿Ñ€Ð¾Ñ„ÐµÑÐ¸Ð¾Ð½Ð°Ð»Ð½Ð° ÑÐ¿Ð¾ÑÐ¾Ð±Ð½Ð¾ÑÑ‚"]
     )
     sec_44 = pick_section_text_with_keywords(
-        sections, ["4.4", "5.4"], ["стандарди", "квалитет", "iso"]
+        sections, ["4.4", "5.4"], ["ÑÑ‚Ð°Ð½Ð´Ð°Ñ€Ð´Ð¸", "ÐºÐ²Ð°Ð»Ð¸Ñ‚ÐµÑ‚", "iso"]
     )
     sec_best = pick_section_text_with_keywords(
-        sections, ["5.4", "5"], ["критериум за избор", "најповолна понуда", "критериум"]
+        sections, ["5.4", "5"], ["ÐºÑ€Ð¸Ñ‚ÐµÑ€Ð¸ÑƒÐ¼ Ð·Ð° Ð¸Ð·Ð±Ð¾Ñ€", "Ð½Ð°Ñ˜Ð¿Ð¾Ð²Ð¾Ð»Ð½Ð° Ð¿Ð¾Ð½ÑƒÐ´Ð°", "ÐºÑ€Ð¸Ñ‚ÐµÑ€Ð¸ÑƒÐ¼"]
     )
 
-    auction_note = compact_text(sec_161, 260) if sec_161 else "Нема експлицитно пронајден дел 1.6.1."
-    quality_note = compact_text(sec_44, 260) if sec_44 else "Нема експлицитно пронајдени стандарди."
+    auction_note = compact_text(sec_161, 260) if sec_161 else "ÐÐµÐ¼Ð° ÐµÐºÑÐ¿Ð»Ð¸Ñ†Ð¸Ñ‚Ð½Ð¾ Ð¿Ñ€Ð¾Ð½Ð°Ñ˜Ð´ÐµÐ½ Ð´ÐµÐ» 1.6.1."
+    quality_note = compact_text(sec_44, 260) if sec_44 else "ÐÐµÐ¼Ð° ÐµÐºÑÐ¿Ð»Ð¸Ñ†Ð¸Ñ‚Ð½Ð¾ Ð¿Ñ€Ð¾Ð½Ð°Ñ˜Ð´ÐµÐ½Ð¸ ÑÑ‚Ð°Ð½Ð´Ð°Ñ€Ð´Ð¸."
 
     lines = [
-        f"# Контекст за upload - {tender_id}",
+        f"# ÐšÐ¾Ð½Ñ‚ÐµÐºÑÑ‚ Ð·Ð° upload - {tender_id}",
         "",
-        f"Извор: `{main_source_file}`",
+        f"Ð˜Ð·Ð²Ð¾Ñ€: `{main_source_file}`",
         "",
-        f"**Име на институција:** {detect_institution_name(full_text)}",
-        f"**Тип на постапка:** {detect_procedure_type_from_full_text(full_text, sec_15)}",
-        f"**Предмет на набавка:** {compact_text(sec_13, 260) or 'Провери дел 1.3.'}",
-        f"**Посебни начини за доделување на договорот за јавна набавка:** {auction_note}",
-        f"**Цена на понудата:** {compact_text(sec_34, 260) or 'Провери дел 3.4.'}",
-        f"**Елементи на понудата:** {compact_text(sec_310, 260) or 'Провери дел 3.10 / 4.3.'}",
-        f"**Критериуми за утврдување на способност на понудувачите:** {compact_text(sec_51, 260) or 'Провери дел 5.1 / 4.1.'}",
-        f"**Причини за исклучување од постапката:** {compact_text(sec_42, 260) or 'Провери дел 4.2 / 5.2.'}",
-        f"**Услови за квалитативен избор:** {compact_text(sec_43, 260) or 'Провери дел 4.3 / 5.3.'}",
-        f"**Техничка и професионална способност:** {compact_text(sec_432, 260) or 'Провери дел 4.3.2 / 5.3.2.'}",
-        f"**Стандарди за системи за квалитет:** {quality_note}",
-        f"**КРИТЕРИУМ ЗА ИЗБОР НА НАЈПОВОЛНА ПОНУДА:** {compact_text(sec_best, 220) or 'Провери дел за критериум.'}",
+        f"**Ð˜Ð¼Ðµ Ð½Ð° Ð¸Ð½ÑÑ‚Ð¸Ñ‚ÑƒÑ†Ð¸Ñ˜Ð°:** {detect_institution_name(full_text)}",
+        f"**Ð¢Ð¸Ð¿ Ð½Ð° Ð¿Ð¾ÑÑ‚Ð°Ð¿ÐºÐ°:** {detect_procedure_type_from_full_text(full_text, sec_15)}",
+        f"**ÐŸÑ€ÐµÐ´Ð¼ÐµÑ‚ Ð½Ð° Ð½Ð°Ð±Ð°Ð²ÐºÐ°:** {compact_text(sec_13, 260) or 'ÐŸÑ€Ð¾Ð²ÐµÑ€Ð¸ Ð´ÐµÐ» 1.3.'}",
+        f"**ÐŸÐ¾ÑÐµÐ±Ð½Ð¸ Ð½Ð°Ñ‡Ð¸Ð½Ð¸ Ð·Ð° Ð´Ð¾Ð´ÐµÐ»ÑƒÐ²Ð°ÑšÐµ Ð½Ð° Ð´Ð¾Ð³Ð¾Ð²Ð¾Ñ€Ð¾Ñ‚ Ð·Ð° Ñ˜Ð°Ð²Ð½Ð° Ð½Ð°Ð±Ð°Ð²ÐºÐ°:** {auction_note}",
+        f"**Ð¦ÐµÐ½Ð° Ð½Ð° Ð¿Ð¾Ð½ÑƒÐ´Ð°Ñ‚Ð°:** {compact_text(sec_34, 260) or 'ÐŸÑ€Ð¾Ð²ÐµÑ€Ð¸ Ð´ÐµÐ» 3.4.'}",
+        f"**Ð•Ð»ÐµÐ¼ÐµÐ½Ñ‚Ð¸ Ð½Ð° Ð¿Ð¾Ð½ÑƒÐ´Ð°Ñ‚Ð°:** {compact_text(sec_310, 260) or 'ÐŸÑ€Ð¾Ð²ÐµÑ€Ð¸ Ð´ÐµÐ» 3.10 / 4.3.'}",
+        f"**ÐšÑ€Ð¸Ñ‚ÐµÑ€Ð¸ÑƒÐ¼Ð¸ Ð·Ð° ÑƒÑ‚Ð²Ñ€Ð´ÑƒÐ²Ð°ÑšÐµ Ð½Ð° ÑÐ¿Ð¾ÑÐ¾Ð±Ð½Ð¾ÑÑ‚ Ð½Ð° Ð¿Ð¾Ð½ÑƒÐ´ÑƒÐ²Ð°Ñ‡Ð¸Ñ‚Ðµ:** {compact_text(sec_51, 260) or 'ÐŸÑ€Ð¾Ð²ÐµÑ€Ð¸ Ð´ÐµÐ» 5.1 / 4.1.'}",
+        f"**ÐŸÑ€Ð¸Ñ‡Ð¸Ð½Ð¸ Ð·Ð° Ð¸ÑÐºÐ»ÑƒÑ‡ÑƒÐ²Ð°ÑšÐµ Ð¾Ð´ Ð¿Ð¾ÑÑ‚Ð°Ð¿ÐºÐ°Ñ‚Ð°:** {compact_text(sec_42, 260) or 'ÐŸÑ€Ð¾Ð²ÐµÑ€Ð¸ Ð´ÐµÐ» 4.2 / 5.2.'}",
+        f"**Ð£ÑÐ»Ð¾Ð²Ð¸ Ð·Ð° ÐºÐ²Ð°Ð»Ð¸Ñ‚Ð°Ñ‚Ð¸Ð²ÐµÐ½ Ð¸Ð·Ð±Ð¾Ñ€:** {compact_text(sec_43, 260) or 'ÐŸÑ€Ð¾Ð²ÐµÑ€Ð¸ Ð´ÐµÐ» 4.3 / 5.3.'}",
+        f"**Ð¢ÐµÑ…Ð½Ð¸Ñ‡ÐºÐ° Ð¸ Ð¿Ñ€Ð¾Ñ„ÐµÑÐ¸Ð¾Ð½Ð°Ð»Ð½Ð° ÑÐ¿Ð¾ÑÐ¾Ð±Ð½Ð¾ÑÑ‚:** {compact_text(sec_432, 260) or 'ÐŸÑ€Ð¾Ð²ÐµÑ€Ð¸ Ð´ÐµÐ» 4.3.2 / 5.3.2.'}",
+        f"**Ð¡Ñ‚Ð°Ð½Ð´Ð°Ñ€Ð´Ð¸ Ð·Ð° ÑÐ¸ÑÑ‚ÐµÐ¼Ð¸ Ð·Ð° ÐºÐ²Ð°Ð»Ð¸Ñ‚ÐµÑ‚:** {quality_note}",
+        f"**ÐšÐ Ð˜Ð¢Ð•Ð Ð˜Ð£Ðœ Ð—Ð Ð˜Ð—Ð‘ÐžÐ  ÐÐ ÐÐÐˆÐŸÐžÐ’ÐžÐ›ÐÐ ÐŸÐžÐÐ£Ð”Ð:** {compact_text(sec_best, 220) or 'ÐŸÑ€Ð¾Ð²ÐµÑ€Ð¸ Ð´ÐµÐ» Ð·Ð° ÐºÑ€Ð¸Ñ‚ÐµÑ€Ð¸ÑƒÐ¼.'}",
         "",
-        "## Дополнително од Техничка спецификација",
+        "## Ð”Ð¾Ð¿Ð¾Ð»Ð½Ð¸Ñ‚ÐµÐ»Ð½Ð¾ Ð¾Ð´ Ð¢ÐµÑ…Ð½Ð¸Ñ‡ÐºÐ° ÑÐ¿ÐµÑ†Ð¸Ñ„Ð¸ÐºÐ°Ñ†Ð¸Ñ˜Ð°",
     ]
     if tech_spec_hits:
         for i, hit in enumerate(tech_spec_hits[:10], start=1):
             page = str(hit.get("page") or "").strip()
-            suffix = f" (стр. {page})" if page else ""
+            suffix = f" (ÑÑ‚Ñ€. {page})" if page else ""
             lines.append(f"- {i}. {compact_text(hit.get('snippet', ''), 220)}{suffix}")
     else:
-        lines.append("- Нема детектирани дополнителни услови во техничката спецификација во оваа обработка.")
+        lines.append("- ÐÐµÐ¼Ð° Ð´ÐµÑ‚ÐµÐºÑ‚Ð¸Ñ€Ð°Ð½Ð¸ Ð´Ð¾Ð¿Ð¾Ð»Ð½Ð¸Ñ‚ÐµÐ»Ð½Ð¸ ÑƒÑÐ»Ð¾Ð²Ð¸ Ð²Ð¾ Ñ‚ÐµÑ…Ð½Ð¸Ñ‡ÐºÐ°Ñ‚Ð° ÑÐ¿ÐµÑ†Ð¸Ñ„Ð¸ÐºÐ°Ñ†Ð¸Ñ˜Ð° Ð²Ð¾ Ð¾Ð²Ð°Ð° Ð¾Ð±Ñ€Ð°Ð±Ð¾Ñ‚ÐºÐ°.")
     return lines
 
 
+def clean_summary_text(text: str) -> str:
+    txt = normalize_csv_cell(text, max_len=1600)
+    txt = re.sub(r"^[\-\u2022\u25aa\u25cf\uf0ad\uf0b7]+\s*", "", txt)
+    txt = re.sub(r"^\d+(?:\.\d+){0,4}\.?\s*", "", txt)
+    txt = re.sub(r"^[A-ZÐ-Ð¨0-9 ]{8,}$", "", txt).strip()
+    return txt
+
+
 def first_sentence(text: str, max_len: int = 220) -> str:
-    txt = compact_text(text, max_len * 2)
+    txt = compact_text(clean_summary_text(text), max_len * 2)
     if not txt:
         return ""
     sentence = re.split(r"(?<=[\.\!\?])\s+", txt, maxsplit=1)[0].strip()
@@ -768,41 +801,49 @@ def pick_section_value(
     keywords: list[str],
     fallback_note: str,
     max_len: int = 220,
+    allow_section_only: bool = True,
+    allow_semantic_fallback: bool = True,
 ) -> dict[str, str]:
     for key in preferred_keys:
         payload = sections.get(key)
         if not payload:
             continue
         txt = payload.get("text", "")
-        low = txt.lower()
+        heading = payload.get("heading", "")
+        merged = f"{heading} {txt}"
+        low = merged.lower()
         if keywords and any(kw in low for kw in keywords):
             return {
-                "value": first_sentence(txt, max_len) or fallback_note,
+                "value": first_sentence(merged, max_len) or fallback_note,
                 "confidence": "high",
                 "source_section": key,
                 "mapping": "semantic+section",
             }
 
-    for key in preferred_keys:
-        payload = sections.get(key)
-        if payload and payload.get("text"):
-            return {
-                "value": first_sentence(payload["text"], max_len) or fallback_note,
-                "confidence": "medium",
-                "source_section": key,
-                "mapping": "section_only",
-            }
+    if allow_section_only:
+        for key in preferred_keys:
+            payload = sections.get(key)
+            if payload and payload.get("text"):
+                return {
+                    "value": first_sentence(payload["text"], max_len) or fallback_note,
+                    "confidence": "medium",
+                    "source_section": key,
+                    "mapping": "section_only",
+                }
 
-    for sec_code, payload in sections.items():
-        txt = payload.get("text", "")
-        low = txt.lower()
-        if keywords and any(kw in low for kw in keywords):
-            return {
-                "value": first_sentence(txt, max_len) or fallback_note,
-                "confidence": "low",
-                "source_section": sec_code,
-                "mapping": "semantic_fallback",
-            }
+    if allow_semantic_fallback:
+        for sec_code, payload in sections.items():
+            txt = payload.get("text", "")
+            heading = payload.get("heading", "")
+            merged = f"{heading} {txt}"
+            low = merged.lower()
+            if keywords and any(kw in low for kw in keywords):
+                return {
+                    "value": first_sentence(merged, max_len) or fallback_note,
+                    "confidence": "low",
+                    "source_section": sec_code,
+                    "mapping": "semantic_fallback",
+                }
 
     return {
         "value": f"{MANUAL_REVIEW_FLAG} - {fallback_note}",
@@ -813,6 +854,12 @@ def pick_section_value(
 
 
 def detect_institution_field(full_text: str) -> dict[str, str]:
+    def trim_institution_name(raw: str) -> str:
+        candidate = normalize_csv_cell(raw, max_len=220)
+        candidate = re.split(r"\s*(?:,|;|\bÐ°Ð´Ñ€ÐµÑÐ°\b|\bÑ‚ÐµÐ»ÐµÑ„Ð¾Ð½\b|\bÐµÐ»ÐµÐºÑ‚Ñ€Ð¾Ð½ÑÐºÐ°\b)\s*", candidate, maxsplit=1)[0]
+        candidate = re.sub(r"^[\-\u2022]+\s*", "", candidate).strip(" .,:;")
+        return compact_text(candidate, 120)
+
     normalized = normalize_text(full_text)
     head = normalized[:8000]
     strong_patterns = [
@@ -823,7 +870,7 @@ def detect_institution_field(full_text: str) -> dict[str, str]:
         m = re.search(pat, head, flags=re.IGNORECASE)
         if not m:
             continue
-        candidate = compact_text(m.group(1), 180)
+        candidate = trim_institution_name(m.group(1))
         low = candidate.lower()
         if (
             "\u0447\u0438\u0458 \u043f\u0440\u0435\u0434\u043c\u0435\u0442" in low
@@ -844,7 +891,7 @@ def detect_institution_field(full_text: str) -> dict[str, str]:
         m = re.search(pat, head, flags=re.IGNORECASE)
         if not m:
             continue
-        candidate = compact_text(m.group(1), 180)
+        candidate = trim_institution_name(m.group(1))
         low = candidate.lower()
         if len(candidate.split()) < 2 or any(bad in low for bad in INSTITUTION_BLOCKLIST):
             continue
@@ -862,7 +909,7 @@ def score_tech_spec_hit(hit: dict[str, Any]) -> int:
     snippet = str(hit.get("snippet", ""))
     low = snippet.lower()
     score = 0
-    for kw in ("мора", "задолж", "исклуч", "доказ", "сертификат", "рок", "гаран"):
+    for kw in ("Ð¼Ð¾Ñ€Ð°", "Ð·Ð°Ð´Ð¾Ð»Ð¶", "Ð¸ÑÐºÐ»ÑƒÑ‡", "Ð´Ð¾ÐºÐ°Ð·", "ÑÐµÑ€Ñ‚Ð¸Ñ„Ð¸ÐºÐ°Ñ‚", "Ñ€Ð¾Ðº", "Ð³Ð°Ñ€Ð°Ð½"):
         if kw in low:
             score += 2
     score += min(3, max(0, len(snippet) // 120))
@@ -904,8 +951,9 @@ def build_context_fields(
         sections,
         ["1.5"],
         ["постапка", "отворена"],
-        "\u043f\u0440\u043e\u0446\u0435\u0434\u0443\u0440\u0430 (\u0434\u0435\u043b 1.5)",
+        "процедура (дел 1.5)",
         180,
+        allow_semantic_fallback=False,
     )
 
     fields: dict[str, dict[str, str]] = {
@@ -917,36 +965,99 @@ def build_context_fields(
             "mapping": "derived_from_procedure",
         },
         "subject_of_procurement": pick_section_value(
-            sections, ["1.3"], ["предмет", "набавка"], "\u043f\u0440\u0435\u0434\u043c\u0435\u0442 \u043d\u0430 \u043d\u0430\u0431\u0430\u0432\u043a\u0430 (\u0434\u0435\u043b 1.3)"
+            sections,
+            ["1.3"],
+            ["предмет", "набавка"],
+            "предмет на набавка (дел 1.3)",
+            allow_semantic_fallback=False,
         ),
         "award_method_notes": pick_section_value(
-            sections, ["1.6.1", "1.6.1.1"], ["аукција", "електронска", "доделување"], "\u0434\u043e\u0434\u0435\u043b\u0443\u0432\u0430\u045a\u0435 \u043d\u0430 \u0434\u043e\u0433\u043e\u0432\u043e\u0440 (\u0434\u0435\u043b 1.6.1)"
+            sections,
+            ["1.6.1", "1.6.1.1"],
+            ["аукција", "електронска", "доделув", "додели"],
+            "доделување на договор (дел 1.6.1)",
+            allow_section_only=False,
         ),
         "offer_price_notes": pick_section_value(
-            sections, ["3.4"], ["цена", "понуда"], "\u0446\u0435\u043d\u0430 \u043d\u0430 \u043f\u043e\u043d\u0443\u0434\u0430 (\u0434\u0435\u043b 3.4)"
+            sections,
+            ["3.4"],
+            ["цена", "понуда"],
+            "цена на понуда (дел 3.4)",
+            allow_semantic_fallback=False,
         ),
         "offer_elements": pick_section_value(
-            sections, ["3.10", "4.3"], ["содржина на понудата", "елементи", "финансиска понуда"], "\u0435\u043b\u0435\u043c\u0435\u043d\u0442\u0438 \u043d\u0430 \u043f\u043e\u043d\u0443\u0434\u0430\u0442\u0430 (\u0434\u0435\u043b 3.10/4.3)"
+            sections,
+            ["3.10", "4.3"],
+            ["содржина на понудата", "елементи на понудата", "финансиска понуда", "техничка понуда"],
+            "елементи на понудата (дел 3.10/4.3)",
+            allow_section_only=False,
         ),
         "bidder_eligibility_criteria": pick_section_value(
-            sections, ["5.1", "4.1"], ["критериуми", "утврдување способност", "способност"], "\u0441\u043f\u043e\u0441\u043e\u0431\u043d\u043e\u0441\u0442 \u043d\u0430 \u043f\u043e\u043d\u0443\u0434\u0443\u0432\u0430\u0447 (\u0434\u0435\u043b 5.1/4.1)"
+            sections,
+            ["5.1"],
+            ["утврдување способност", "критериуми", "способност"],
+            "способност на понудувач (дел 5.1)",
+            allow_semantic_fallback=False,
         ),
         "exclusion_grounds": pick_section_value(
-            sections, ["4.2", "5.2"], ["причини за исклучување", "исклучување"], "\u043f\u0440\u0438\u0447\u0438\u043d\u0438 \u0437\u0430 \u0438\u0441\u043a\u043b\u0443\u0447\u0443\u0432\u0430\u045a\u0435 (\u0434\u0435\u043b 4.2/5.2)"
+            sections,
+            ["5.2", "4.2.4"],
+            ["причини за исклучување", "исклучување", "основи за исклучување"],
+            "причини за исклучување (дел 5.2)",
+            allow_section_only=False,
+            allow_semantic_fallback=False,
         ),
         "qualitative_selection_conditions": pick_section_value(
-            sections, ["4.3", "5.3"], ["квалитативен избор", "услови"], "\u043a\u0432\u0430\u043b\u0438\u0442\u0430\u0442\u0438\u0432\u0435\u043d \u0438\u0437\u0431\u043e\u0440 (\u0434\u0435\u043b 4.3/5.3)"
+            sections,
+            ["5.3"],
+            ["квалитативен избор", "услови за квалитативен избор"],
+            "квалитативен избор (дел 5.3)",
+            allow_section_only=False,
+            allow_semantic_fallback=False,
         ),
         "technical_professional_ability": pick_section_value(
-            sections, ["4.3.2", "5.3.2"], ["техничка", "професионална способност"], "\u0442\u0435\u0445\u043d\u0438\u0447\u043a\u0430/\u043f\u0440\u043e\u0444\u0435\u0441\u0438\u043e\u043d\u0430\u043b\u043d\u0430 \u0441\u043f\u043e\u0441\u043e\u0431\u043d\u043e\u0441\u0442 (\u0434\u0435\u043b 4.3.2/5.3.2)"
+            sections,
+            ["5.3.2"],
+            ["техничка и професионална способност", "техничка способност", "професионална способност"],
+            "техничка/професионална способност (дел 5.3.2)",
+            allow_section_only=False,
+            allow_semantic_fallback=False,
         ),
         "quality_standards": pick_section_value(
-            sections, ["4.4", "5.4"], ["стандарди", "квалитет", "iso"], "\u0441\u0442\u0430\u043d\u0434\u0430\u0440\u0434\u0438 \u043a\u0432\u0430\u043b\u0438\u0442\u0435\u0442 (\u0434\u0435\u043b 4.4/5.4)"
+            sections,
+            ["5.3.3", "5.3"],
+            ["стандард", "квалитет", "iso", "еквивалент"],
+            "стандарди квалитет (дел 5.3)",
+            allow_section_only=False,
         ),
         "best_offer_criterion": pick_section_value(
-            sections, ["5.4", "5"], ["критериум за избор", "најповолна понуда", "критериум"], "\u043a\u0440\u0438\u0442\u0435\u0440\u0438\u0443\u043c \u0437\u0430 \u043d\u0430\u0458\u043f\u043e\u0432\u043e\u043b\u043d\u0430 \u043f\u043e\u043d\u0443\u0434\u0430"
+            sections,
+            ["6.1", "5.4"],
+            ["критериум за избор", "најповолна понуда", "економски најповолна", "најниска понудена цена"],
+            "критериум за најповолна понуда",
+            allow_section_only=False,
+            allow_semantic_fallback=False,
         ),
     }
+
+    subj = fields.get("subject_of_procurement", {})
+    subj_value = str(subj.get("value", ""))
+    if (not subj_value) or ("корупц" in subj_value.lower()) or ("општи мерки" in subj_value.lower()):
+        inferred_subject = detect_subject_from_full_text(full_text)
+        if inferred_subject:
+            fields["subject_of_procurement"] = {
+                "value": inferred_subject,
+                "confidence": "medium",
+                "source_section": "",
+                "mapping": "full_text_subject_fallback",
+            }
+        else:
+            fields["subject_of_procurement"] = {
+                "value": f"{MANUAL_REVIEW_FLAG} - предмет на набавка",
+                "confidence": "low",
+                "source_section": "",
+                "mapping": "subject_manual_review",
+            }
 
     for field in fields.values():
         if field.get("confidence") == "low" and MANUAL_REVIEW_FLAG not in field.get("value", ""):
@@ -1027,20 +1138,20 @@ def write_context_docx_from_template(
     if not template_path.exists():
         return False
 
-    label_to_field = {
-        "Име на институција": "institution_name",
-        "Тип на постапка": "procedure_type",
-        "Предмет на набавка": "subject_of_procurement",
-        "Посебни начини за доделување на договорот за јавна набавка": "award_method_notes",
-        "Цена на понудата": "offer_price_notes",
-        "Елементи на понудата": "offer_elements",
-        "Критериуми за утврдување на способност на понудувачите": "bidder_eligibility_criteria",
-        "Причини за исклучување од постапката": "exclusion_grounds",
-        "Услови за квалитативен избор": "qualitative_selection_conditions",
-        "Техничка и професионална способност": "technical_professional_ability",
-        "Стандарди за системи за квалитет": "quality_standards",
-        "КРИТЕРИУМ ЗА ИЗБОР НА НАЈПОВОЛНА ПОНУДА": "best_offer_criterion",
-    }
+    ordered_fields = [
+        "institution_name",
+        "procedure_type",
+        "subject_of_procurement",
+        "award_method_notes",
+        "offer_price_notes",
+        "offer_elements",
+        "bidder_eligibility_criteria",
+        "exclusion_grounds",
+        "qualitative_selection_conditions",
+        "technical_professional_ability",
+        "quality_standards",
+        "best_offer_criterion",
+    ]
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(template_path, "r") as zin:
@@ -1049,17 +1160,14 @@ def write_context_docx_from_template(
                 data = zin.read(item.filename)
                 if item.filename == "word/document.xml":
                     root = ET.fromstring(data)
-                    for tr in root.findall(f".//{W_NS}tr"):
+                    rows = root.findall(f".//{W_NS}tr")
+                    for idx, tr in enumerate(rows):
+                        if idx >= len(ordered_fields):
+                            break
                         tcs = tr.findall(f"{W_NS}tc")
                         if len(tcs) < 2:
                             continue
-                        left_text = "".join(
-                            (t.text or "")
-                            for t in tcs[0].findall(f".//{W_NS}t")
-                        ).strip()
-                        field_key = label_to_field.get(left_text)
-                        if not field_key:
-                            continue
+                        field_key = ordered_fields[idx]
                         value = normalize_csv_cell(
                             context_fields.get(field_key, {}).get("value", MANUAL_REVIEW_FLAG), max_len=520
                         )
@@ -1088,7 +1196,7 @@ def main() -> int:
     parser.add_argument("--tender-id", default="", help="Optional tender id filter, e.g. 09362-2025.")
     parser.add_argument(
         "--context-template",
-        default="context template.docx",
+        default="task_force/templates/context_template_v2.docx",
         help="DOCX template used for tender context export.",
     )
     args = parser.parse_args()
@@ -1327,3 +1435,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
