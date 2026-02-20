@@ -96,7 +96,7 @@ class TenderSearchFrame(ttk.Frame):
         self.var_headless = tk.BooleanVar(value=True)
         self.var_username = tk.StringVar(value="")
         self.var_password = tk.StringVar(value="")
-        self.var_role = tk.StringVar(value="procurement_officer")
+        self.var_role = tk.StringVar(value="tender_procurement_specialist")
         self.var_process_mode = tk.StringVar(value="esjn")
         self.var_search_mode = tk.StringVar(value="Mode: idle")
         self.var_search_quality = tk.StringVar(value="Quality: raw=0 filtered=0 fallback=no pages=0")
@@ -112,6 +112,7 @@ class TenderSearchFrame(ttk.Frame):
         self.wait = None
         self._driver_lock = threading.Lock()
         self._build_ui()
+        self.after(250, self.on_connect)
 
     def _build_ui(self):
         top = ttk.Frame(self)
@@ -127,8 +128,8 @@ class TenderSearchFrame(ttk.Frame):
         role_box = ttk.Combobox(
             top,
             textvariable=self.var_role,
-            values=("procurement_officer", "admin", "compliance_auditor", "viewer"),
-            width=20,
+            values=("tender_procurement_specialist", "ceo"),
+            width=28,
             state="readonly",
         )
         role_box.grid(row=0, column=7, sticky="w")
@@ -145,36 +146,10 @@ class TenderSearchFrame(ttk.Frame):
         ttk.Label(top, text="Download folder:").grid(row=1, column=0, sticky="w")
         ttk.Entry(top, textvariable=self.var_download, width=60).grid(row=1, column=1, columnspan=4, sticky="we")
         ttk.Button(top, text="Browse...", command=self.choose_dir).grid(row=1, column=5, sticky="w")
-        ttk.Checkbutton(top, text="Headless (always on)", variable=self.var_headless, state="disabled").grid(
-            row=1, column=6, sticky="w", padx=(8, 0)
-        )
-        ttk.Checkbutton(top, text="Collect all pages", variable=self.var_collect_all_pages).grid(
-            row=2, column=0, sticky="w"
-        )
-        ttk.Label(top, text="Max pages:").grid(row=2, column=1, sticky="e")
-        ttk.Entry(top, textvariable=self.var_max_pages, width=6).grid(row=2, column=2, sticky="w")
-        ttk.Checkbutton(top, text="Strict keyword filter", variable=self.var_strict_filter).grid(
-            row=2, column=3, sticky="w", padx=(10, 0)
-        )
-        ttk.Label(top, text="Match mode:").grid(row=2, column=4, sticky="e")
-        mode_box = ttk.Combobox(
-            top,
-            textvariable=self.var_match_mode,
-            values=("contains", "all_words", "exact_phrase", "regex"),
-            width=14,
-            state="readonly",
-        )
-        mode_box.grid(row=2, column=5, sticky="w")
+        ttk.Label(top, text="Headless: always on").grid(row=1, column=6, sticky="w", padx=(8, 0))
 
         btns = ttk.Frame(self)
         btns.pack(fill="x", padx=8, pady=(0, 8))
-        ttk.Button(btns, text="Connect", command=self.on_connect).pack(side="left")
-        ttk.Button(btns, text="Extract Tender Context", command=self.on_extract_tender_context).pack(
-            side="left", padx=6
-        )
-        ttk.Button(btns, text="Open Latest Upload Hints", command=self.on_open_latest_upload_hints).pack(
-            side="left"
-        )
         ttk.Button(btns, text="Search", command=self.on_search).pack(side="left")
         ttk.Button(btns, text="Download selected", command=self.on_download_selected).pack(
             side="left", padx=6
@@ -255,6 +230,15 @@ class TenderSearchFrame(ttk.Frame):
                 self.wait = WebDriverWait(self.driver, 20)
         return self.driver, self.wait
 
+    @staticmethod
+    def _map_role_for_auth(role: str) -> str:
+        normalized = (role or "").strip().lower()
+        role_map = {
+            "ceo": "admin",
+            "tender_procurement_specialist": "procurement_officer",
+        }
+        return role_map.get(normalized, normalized)
+
     def on_connect(self):
         def work():
             t0 = time.perf_counter()
@@ -267,10 +251,12 @@ class TenderSearchFrame(ttk.Frame):
 
         threading.Thread(target=work, daemon=True).start()
 
-    def on_extract_tender_context(self):
+    def on_extract_tender_context(self, auto_open_hints: bool = False, notify_errors: bool = False):
         script_path = Path.cwd() / "task_force" / "scripts" / "extract_tender_context.py"
         if not script_path.exists():
-            messagebox.showerror("Missing script", f"Not found:\n{script_path}")
+            self.log(f"ERROR: Missing context script: {script_path}")
+            if notify_errors:
+                messagebox.showerror("Missing script", f"Not found:\n{script_path}")
             return
 
         def work():
@@ -299,20 +285,26 @@ class TenderSearchFrame(ttk.Frame):
                 if result.returncode != 0:
                     if result.stderr.strip():
                         self.log(f"ERROR: {result.stderr.strip()}")
-                    messagebox.showerror("Extract failed", "Tender context extraction failed. Check logs.")
+                    if notify_errors:
+                        messagebox.showerror("Extract failed", "Tender context extraction failed. Check logs.")
                     return
                 self.log("INFO: Tender context extraction completed.")
+                if auto_open_hints:
+                    self.on_open_latest_upload_hints(notify_if_missing=False)
             except Exception as exc:
                 self.log(f"ERROR: Context extraction failed: {exc}")
-                messagebox.showerror("Extract failed", str(exc))
+                if notify_errors:
+                    messagebox.showerror("Extract failed", str(exc))
 
         threading.Thread(target=work, daemon=True).start()
 
-    def on_open_latest_upload_hints(self):
+    def on_open_latest_upload_hints(self, notify_if_missing: bool = True):
         out_dir = Path.cwd() / "task_force" / "out" / "tender_context"
         files = sorted(out_dir.glob("upload_hints_*.csv"), key=lambda p: p.stat().st_mtime, reverse=True)
         if not files:
-            messagebox.showinfo("No hints", f"No upload hints found in:\n{out_dir}")
+            self.log(f"INFO: No upload hints found in: {out_dir}")
+            if notify_if_missing:
+                messagebox.showinfo("No hints", f"No upload hints found in:\n{out_dir}")
             return
         latest = files[0]
         try:
@@ -587,6 +579,7 @@ class TenderSearchFrame(ttk.Frame):
         username = (self.var_username.get() or "").strip()
         password = self.var_password.get() or ""
         role = (self.var_role.get() or "").strip()
+        mapped_role = self._map_role_for_auth(role)
         route = route_action(self.var_process_mode.get(), "download_selected")
         self.log(
             f"WORKFLOW_ROUTE mode={route.mode} action=download_selected "
@@ -595,8 +588,15 @@ class TenderSearchFrame(ttk.Frame):
         if not route.allowed:
             messagebox.showerror("Workflow routing", route.message)
             return
-        decision = authorize_action("download_selected", username, role)
-        self.log(build_auth_audit_event("download_selected", username, role, decision.allowed, decision.reason))
+        decision = authorize_action("download_selected", username, mapped_role)
+        self.log(
+            f"AUTH_ROLE_MAP ui_role={role or 'unset'} internal_role={mapped_role or 'unset'}"
+        )
+        self.log(
+            build_auth_audit_event(
+                "download_selected", username, mapped_role, decision.allowed, decision.reason
+            )
+        )
         if not decision.allowed:
             messagebox.showerror("Authorization denied", decision.reason)
             return
@@ -756,6 +756,7 @@ class TenderSearchFrame(ttk.Frame):
                         },
                     )
                 self.log(f"DONE: Started downloads: {total_started}")
+                self.on_extract_tender_context(auto_open_hints=True, notify_errors=False)
             except Exception as exc:
                 self.log(f"ERROR: Download failed: {exc}")
                 guidance = build_corrective_guidance(
@@ -815,14 +816,15 @@ class TenderSearchFrame(ttk.Frame):
         self.var_headless.set(True)
         self.var_username.set(data.get("username", self.var_username.get()))
         self.var_password.set(data.get("password", self.var_password.get()))
-        self.var_role.set(data.get("role", self.var_role.get()))
+        loaded_role = str(data.get("role", self.var_role.get()))
+        if loaded_role not in {"ceo", "tender_procurement_specialist"}:
+            loaded_role = "tender_procurement_specialist"
+        self.var_role.set(loaded_role)
         self.var_process_mode.set(data.get("process_mode", self.var_process_mode.get()))
-        self.var_collect_all_pages.set(
-            bool(data.get("collect_all_pages", self.var_collect_all_pages.get()))
-        )
-        self.var_max_pages.set(str(data.get("max_pages", self.var_max_pages.get())))
-        self.var_strict_filter.set(bool(data.get("strict_filter", self.var_strict_filter.get())))
-        self.var_match_mode.set(str(data.get("match_mode", self.var_match_mode.get())))
+        self.var_collect_all_pages.set(False)
+        self.var_max_pages.set("5")
+        self.var_strict_filter.set(True)
+        self.var_match_mode.set("contains")
 
     def shutdown(self):
         if self.driver is not None:
@@ -839,7 +841,7 @@ class DocumentationFrame(ttk.Frame):
         self.var_output_dir = tk.StringVar(value=str(Path.cwd() / "generated_docs"))
         self.var_output_name = tk.StringVar(value="tender-document.docx")
         self.var_username = tk.StringVar(value="")
-        self.var_role = tk.StringVar(value="procurement_officer")
+        self.var_role = tk.StringVar(value="tender_procurement_specialist")
         self.var_process_mode = tk.StringVar(value="esjn")
         self.audit_file = Path.cwd() / "compliance" / "audit" / "events.jsonl"
         self._build_ui()
@@ -864,7 +866,7 @@ class DocumentationFrame(ttk.Frame):
         role_box = ttk.Combobox(
             top,
             textvariable=self.var_role,
-            values=("procurement_officer", "admin", "compliance_auditor", "viewer"),
+            values=("tender_procurement_specialist", "ceo"),
             width=24,
             state="readonly",
         )
@@ -930,6 +932,15 @@ class DocumentationFrame(ttk.Frame):
             return False
         return True
 
+    @staticmethod
+    def _map_role_for_auth(role: str) -> str:
+        normalized = (role or "").strip().lower()
+        role_map = {
+            "ceo": "admin",
+            "tender_procurement_specialist": "procurement_officer",
+        }
+        return role_map.get(normalized, normalized)
+
     def choose_template(self):
         path = filedialog.askopenfilename(
             title="Choose template",
@@ -976,6 +987,7 @@ class DocumentationFrame(ttk.Frame):
         output_name = self.var_output_name.get().strip() or "tender-document.docx"
         username = (self.var_username.get() or "").strip()
         role = (self.var_role.get() or "").strip()
+        mapped_role = self._map_role_for_auth(role)
         if not self._enforce_runtime_policy("generate_document"):
             return
         route = route_action(self.var_process_mode.get(), "generate_document")
@@ -986,8 +998,13 @@ class DocumentationFrame(ttk.Frame):
         if not route.allowed:
             messagebox.showerror("Workflow routing", route.message)
             return
-        decision = authorize_action("generate_document", username, role)
-        self.log(build_auth_audit_event("generate_document", username, role, decision.allowed, decision.reason))
+        decision = authorize_action("generate_document", username, mapped_role)
+        self.log(f"AUTH_ROLE_MAP ui_role={role or 'unset'} internal_role={mapped_role or 'unset'}")
+        self.log(
+            build_auth_audit_event(
+                "generate_document", username, mapped_role, decision.allowed, decision.reason
+            )
+        )
         if not decision.allowed:
             messagebox.showerror("Authorization denied", decision.reason)
             return
@@ -1120,7 +1137,10 @@ class DocumentationFrame(ttk.Frame):
         self.var_output_dir.set(data.get("output_dir", self.var_output_dir.get()))
         self.var_output_name.set(data.get("output_name", self.var_output_name.get()))
         self.var_username.set(data.get("username", self.var_username.get()))
-        self.var_role.set(data.get("role", self.var_role.get()))
+        loaded_role = str(data.get("role", self.var_role.get()))
+        if loaded_role not in {"ceo", "tender_procurement_specialist"}:
+            loaded_role = "tender_procurement_specialist"
+        self.var_role.set(loaded_role)
         self.var_process_mode.set(data.get("process_mode", self.var_process_mode.get()))
         self.values_text.delete("1.0", "end")
         self.values_text.insert("1.0", data.get("values_text", ""))
