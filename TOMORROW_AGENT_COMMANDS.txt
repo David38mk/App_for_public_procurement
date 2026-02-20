@@ -1,0 +1,45 @@
+Tomorrow Agent Command Runbook
+Date: 2026-02-19
+
+1) Open project and verify git state
+cd "C:\Users\rabota\Desktop\App for public procurements"
+git status -sb
+git log --oneline -n 5
+
+2) Push local commit (network required)
+git push origin main
+
+3) Read handoff/context first
+type "AGENTS.md"
+type "NEXT_AGENT_PROMPT.md"
+type "task_force\out\handoff_master.md"
+type "task_force\out\implementation_tickets.csv"
+type "compliance\IMPLEMENTATION_BACKLOG.md"
+type "compliance\review\promotion_candidates.csv"
+type "compliance\review\SME_LEGAL_PROMOTION_BRIEF_2026-02-20.md"
+
+4) Run app
+C:\Users\rabota\AppData\Local\Programs\Python\Python314\python.exe app\main.py
+
+5) Search troubleshooting steps
+- In Tender Search tab use keyword: интернет
+- Keep Process mode: esjn
+- If rows not shown, click "Copy Logs" and save output
+- Check debug snapshots under: downloads\debug\
+
+6) Run validation tests
+C:\Users\rabota\AppData\Local\Programs\Python\Python314\python.exe -m unittest ^
+  tests\compliance\test_search_stability.py ^
+  tests\compliance\test_ux_guidance.py ^
+  tests\compliance\test_workflow_router.py ^
+  tests\compliance\test_validation_engine.py ^
+  tests\compliance\test_audit_store.py ^
+  tests\compliance\test_authorization_gate.py ^
+  tests\compliance\test_download_retry_contract.py ^
+  tests\compliance\test_workspace_pack.py ^
+  tests\compliance\test_doc_builder_preflight.py
+
+7) Current delivery state
+- All implementation tickets are marked done.
+- All in-scope rules are approved: REQ-ESJN-2021-001..006 and REQ-EPAZAR-2022-001..003.
+- Runtime policy gate can load approved rules for all in-scope modules.

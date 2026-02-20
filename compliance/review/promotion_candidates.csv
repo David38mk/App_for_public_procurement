@@ -1,0 +1,4 @@
+﻿"requirement_id","rule_id","app_module","test_case_id","current_approval_state","target_next_state","source_traceability_status","implementation_status","sme_status","legal_status","promotion_blocker","next_action"
+"REQ-ESJN-2021-002","RULE-ESJN-2021-002","download","TC-REQ-002","approved","none","draft_citation_only","implemented","approved_2026-02-20","approved_2026-02-20","none","Monitor in runtime gate and proceed with next approval wave."
+"REQ-ESJN-2021-004","RULE-ESJN-2021-004","doc_builder","TC-REQ-004","approved","none","draft_citation_only","implemented","approved_2026-02-20","approved_2026-02-20","none","Monitor in runtime gate and proceed with next approval wave."
+"REQ-ESJN-2021-005","RULE-ESJN-2021-005","workspace_pack","TC-REQ-005","approved","none","draft_citation_only","implemented","approved_2026-02-20","approved_2026-02-20","none","Monitor in runtime gate and proceed with next approval wave."

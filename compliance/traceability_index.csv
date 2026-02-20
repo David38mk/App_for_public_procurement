@@ -1,10 +1,10 @@
-requirement_id,rule_id,source_file,source_section,app_module,test_case_id,approval_state
-REQ-ESJN-2021-001,RULE-ESJN-2021-001,Упатства/Priracnik-za-koristenje-na-ESJN-za-Dogovorni-organi-nov2021.pdf,"Draft citation: pages 41, 174, 6 (keyword hits: пребар, оглас, досие)",search,TC-REQ-001,draft
-REQ-ESJN-2021-002,RULE-ESJN-2021-002,Упатства/Priracnik-za-koristenje-na-ESJN-za-Dogovorni-organi-nov2021.pdf,"Draft citation: pages 4, 9, 11 (keyword hits: презем, документ)",download,TC-REQ-002,draft
-REQ-ESJN-2021-003,RULE-ESJN-2021-003,Упатства/Priracnik-za-koristenje-na-ESJN-za-Dogovorni-organi-nov2021.pdf,"Draft citation: pages 25, 4, 13 (keyword hits: најава, корис, лозин)",auth_audit,TC-REQ-003,draft
-REQ-ESJN-2021-004,RULE-ESJN-2021-004,Упатства/Priracnik-za-koristenje-na-ESJN-za-Ekonomski-operatori-nov2021.pdf,"Draft citation: pages 69, 5, 8 (keyword hits: понуда, поднес, услов)",doc_builder,TC-REQ-004,draft
-REQ-ESJN-2021-005,RULE-ESJN-2021-005,Упатства/Priracnik-za-koristenje-na-ESJN-za-Ekonomski-operatori-nov2021.pdf,"Draft citation: pages 33, 59, 66 (keyword hits: прикач, прилог, upload)",workspace_pack,TC-REQ-005,draft
-REQ-ESJN-2021-006,RULE-ESJN-2021-006,Упатства/Priracnik-za-koristenje-na-ESJN-za-Ekonomski-operatori-nov2021.pdf,"Draft citation: pages 32, 9, 19 (keyword hits: потврд, број)",audit_log,TC-REQ-006,draft
-REQ-EPAZAR-2022-001,RULE-EPAZAR-2022-001,Упатства/Корисничко-упатство-за-Економски-оператори-еПазар.pdf,"Draft citation: pages 7, 11, 13 (keyword hits: епазар, оператор, каталог)",workflow_router,TC-REQ-007,draft
-REQ-EPAZAR-2022-002,RULE-EPAZAR-2022-002,Упатства/Корисничко-упатство-за-Економски-оператори-еПазар.pdf,"Draft citation: pages 17, 15, 18 (keyword hits: задолж, полиња, внес)",validation_engine,TC-REQ-008,draft
-REQ-EPAZAR-2022-003,RULE-EPAZAR-2022-003,Упатства/Корисничко-упатство-за-Економски-оператори-еПазар.pdf,"Draft citation: pages 14, 20, 22 (support contact and corrective step guidance candidate)",ux_errors,TC-REQ-009,draft
+﻿"requirement_id","rule_id","source_file","source_section","app_module","test_case_id","approval_state"
+"REQ-ESJN-2021-001","RULE-ESJN-2021-001","Упатства/Priracnik-za-koristenje-na-ESJN-za-Dogovorni-organi-nov2021.pdf","Draft citation: pages 41, 174, 6 (keyword hits: пребар, оглас, досие)","search","TC-REQ-001","approved"
+"REQ-ESJN-2021-002","RULE-ESJN-2021-002","Упатства/Priracnik-za-koristenje-na-ESJN-za-Dogovorni-organi-nov2021.pdf","Draft citation: pages 4, 9, 11 (keyword hits: презем, документ)","download","TC-REQ-002","approved"
+"REQ-ESJN-2021-003","RULE-ESJN-2021-003","Упатства/Priracnik-za-koristenje-na-ESJN-za-Dogovorni-organi-nov2021.pdf","Draft citation: pages 25, 4, 13 (keyword hits: најава, корис, лозин)","auth_audit","TC-REQ-003","approved"
+"REQ-ESJN-2021-004","RULE-ESJN-2021-004","Упатства/Priracnik-za-koristenje-na-ESJN-za-Ekonomski-operatori-nov2021.pdf","Draft citation: pages 69, 5, 8 (keyword hits: понуда, поднес, услов)","doc_builder","TC-REQ-004","approved"
+"REQ-ESJN-2021-005","RULE-ESJN-2021-005","Упатства/Priracnik-za-koristenje-na-ESJN-za-Ekonomski-operatori-nov2021.pdf","Draft citation: pages 33, 59, 66 (keyword hits: прикач, прилог, upload)","workspace_pack","TC-REQ-005","approved"
+"REQ-ESJN-2021-006","RULE-ESJN-2021-006","Упатства/Priracnik-za-koristenje-na-ESJN-za-Ekonomski-operatori-nov2021.pdf","Draft citation: pages 32, 9, 19 (keyword hits: потврд, број)","audit_log","TC-REQ-006","approved"
+"REQ-EPAZAR-2022-001","RULE-EPAZAR-2022-001","Упатства/Корисничко-упатство-за-Економски-оператори-еПазар.pdf","Draft citation: pages 7, 11, 13 (keyword hits: епазар, оператор, каталог)","workflow_router","TC-REQ-007","approved"
+"REQ-EPAZAR-2022-002","RULE-EPAZAR-2022-002","Упатства/Корисничко-упатство-за-Економски-оператори-еПазар.pdf","Draft citation: pages 17, 15, 18 (keyword hits: задолж, полиња, внес)","validation_engine","TC-REQ-008","approved"
+"REQ-EPAZAR-2022-003","RULE-EPAZAR-2022-003","Упатства/Корисничко-упатство-за-Економски-оператори-еПазар.pdf","Draft citation: pages 14, 20, 22 (support contact and corrective step guidance candidate)","ux_errors","TC-REQ-009","approved"

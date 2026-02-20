@@ -1,10 +1,10 @@
-requirement_id,legal_decision,legal_comment,effective_from_confirmed,reviewed_at
-REQ-ESJN-2021-001,,,,
-REQ-ESJN-2021-002,,,,
-REQ-ESJN-2021-003,,,,
-REQ-ESJN-2021-004,,,,
-REQ-ESJN-2021-005,,,,
-REQ-ESJN-2021-006,,,,
-REQ-EPAZAR-2022-001,,,,
-REQ-EPAZAR-2022-002,,,,
-REQ-EPAZAR-2022-003,,,,
+﻿"requirement_id","legal_decision","legal_comment","effective_from_confirmed","reviewed_at"
+"REQ-ESJN-2021-001","approved","Approved for legal interpretation of search/dossier workflow obligations.","2021-01-08","2026-02-20"
+"REQ-ESJN-2021-002","approved","Approved for Wave 1 legal interpretation and applicability for controlled runtime activation.","2021-01-08","2026-02-20"
+"REQ-ESJN-2021-003","approved","Approved for Wave 2 legal interpretation of authenticated role-gated actions.","2021-01-08","2026-02-20"
+"REQ-ESJN-2021-004","approved","Approved for Wave 1 legal interpretation of mandatory preflight requirements.","2021-01-18","2026-02-20"
+"REQ-ESJN-2021-005","approved","Approved for Wave 1 legal interpretation of attachment/completeness requirements.","2021-01-18","2026-02-20"
+"REQ-ESJN-2021-006","approved","Approved for Wave 2 legal interpretation of submission evidence metadata persistence.","2021-01-18","2026-02-20"
+"REQ-EPAZAR-2022-001","approved","Approved for Wave 2 legal interpretation of process routing obligations.","2022-02-21","2026-02-20"
+"REQ-EPAZAR-2022-002","approved","Approved for Wave 2 legal interpretation of mandatory ePazar inputs.","2022-02-21","2026-02-20"
+"REQ-EPAZAR-2022-003","approved","Approved for Wave 2 legal interpretation of corrective guidance/retry-safe behavior.","2022-02-21","2026-02-20"

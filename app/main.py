@@ -20,6 +20,7 @@ try:
     from app.services.authorization import authorize_action, build_auth_audit_event
     from app.services.audit_store import append_audit_event
     from app.services.download_contract import execute_with_retry_contract
+    from app.services.runtime_policy import load_runtime_policy_gate
     from app.services.search_stability import (
         build_search_context,
         stable_sort_tenders,
@@ -48,6 +49,7 @@ except ImportError:
     from services.authorization import authorize_action, build_auth_audit_event
     from services.audit_store import append_audit_event
     from services.download_contract import execute_with_retry_contract
+    from services.runtime_policy import load_runtime_policy_gate
     from services.search_stability import (
         build_search_context,
         stable_sort_tenders,
@@ -79,6 +81,7 @@ MATRIX_PANEL_ALT = "#0A170A"
 MATRIX_FG = "#8CFF8C"
 MATRIX_ACCENT = "#00FF41"
 MATRIX_MUTED = "#5ECB74"
+COMPLIANCE_RULES_DIR = Path.cwd() / "compliance" / "rules"
 
 
 class TenderSearchFrame(ttk.Frame):
@@ -212,16 +215,18 @@ class TenderSearchFrame(ttk.Frame):
         self.clipboard_clear()
         self.clipboard_append(text)
         self.log("INFO: Logs copied to clipboard.")
-        self.update_idletasks()
 
-    def copy_logs(self):
-        text = self.log_text.get("1.0", "end").strip()
-        if not text:
-            messagebox.showinfo("Logs", "No logs to copy.")
-            return
-        self.clipboard_clear()
-        self.clipboard_append(text)
-        self.log("INFO: Logs copied to clipboard.")
+    def _enforce_runtime_policy(self, action: str) -> bool:
+        decision = load_runtime_policy_gate(COMPLIANCE_RULES_DIR).decide(action)
+        active = ",".join(decision.active_rule_ids) if decision.active_rule_ids else "none"
+        self.log(
+            f"POLICY_GATE action={action} module={decision.module} "
+            f"allowed={str(decision.allowed).lower()} active_rules={active} reason={decision.reason}"
+        )
+        if not decision.allowed:
+            messagebox.showerror("Compliance gate", decision.reason)
+            return False
+        return True
 
     def choose_dir(self):
         selected = filedialog.askdirectory(initialdir=self.var_download.get() or str(Path.cwd()))
@@ -333,6 +338,8 @@ class TenderSearchFrame(ttk.Frame):
         keyword = (self.var_keyword.get() or "").strip()
         if not keyword:
             messagebox.showwarning("Missing keyword", "Enter a keyword.")
+            return
+        if not self._enforce_runtime_policy("search"):
             return
         route = route_action(self.var_process_mode.get(), "search")
         self.log(f"WORKFLOW_ROUTE mode={route.mode} action=search allowed={str(route.allowed).lower()} message={route.message}")
@@ -474,6 +481,8 @@ class TenderSearchFrame(ttk.Frame):
         selected = self.tree.selection()
         if not selected:
             messagebox.showinfo("No selection", "Select one or more tenders.")
+            return
+        if not self._enforce_runtime_policy("download_selected"):
             return
         selected_dossiers = [str(self.tree.item(i)["values"][4]) for i in selected]
         scope_ok, scope_msg = validate_download_scope(
@@ -800,6 +809,18 @@ class DocumentationFrame(ttk.Frame):
         self.log_text.see("end")
         self.log_text.config(state="disabled")
 
+    def _enforce_runtime_policy(self, action: str) -> bool:
+        decision = load_runtime_policy_gate(COMPLIANCE_RULES_DIR).decide(action)
+        active = ",".join(decision.active_rule_ids) if decision.active_rule_ids else "none"
+        self.log(
+            f"POLICY_GATE action={action} module={decision.module} "
+            f"allowed={str(decision.allowed).lower()} active_rules={active} reason={decision.reason}"
+        )
+        if not decision.allowed:
+            messagebox.showerror("Compliance gate", decision.reason)
+            return False
+        return True
+
     def choose_template(self):
         path = filedialog.askopenfilename(
             title="Choose template",
@@ -846,6 +867,8 @@ class DocumentationFrame(ttk.Frame):
         output_name = self.var_output_name.get().strip() or "tender-document.docx"
         username = (self.var_username.get() or "").strip()
         role = (self.var_role.get() or "").strip()
+        if not self._enforce_runtime_policy("generate_document"):
+            return
         route = route_action(self.var_process_mode.get(), "generate_document")
         self.log(
             f"WORKFLOW_ROUTE mode={route.mode} action=generate_document "
