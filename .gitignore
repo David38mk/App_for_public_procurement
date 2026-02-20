@@ -16,3 +16,5 @@ review/archive_before_cyrillic_naming_standardization_*/
 *.log
 *.tmp
 
+# Runtime audit stream (generated during app usage)
+compliance/audit/events.jsonl
