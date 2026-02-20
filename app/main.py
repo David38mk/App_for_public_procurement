@@ -38,6 +38,7 @@ try:
         collect_all_pages,
         ensure_on_notices,
         find_dossier_on_pages,
+        has_any_result_rows,
         handle_download_doc_without_login,
         login_on_download_doc,
         open_search_panel,
@@ -67,6 +68,7 @@ except ImportError:
         collect_all_pages,
         ensure_on_notices,
         find_dossier_on_pages,
+        has_any_result_rows,
         handle_download_doc_without_login,
         login_on_download_doc,
         open_search_panel,
@@ -89,14 +91,15 @@ class TenderSearchFrame(ttk.Frame):
         super().__init__(master)
         self.var_keyword = tk.StringVar(value="Internet")
         self.var_download = tk.StringVar(value=str(Path.cwd() / "downloads"))
-        self.var_headless = tk.BooleanVar(value=False)
+        self.var_headless = tk.BooleanVar(value=True)
         self.var_username = tk.StringVar(value="")
         self.var_password = tk.StringVar(value="")
         self.var_role = tk.StringVar(value="procurement_officer")
         self.var_process_mode = tk.StringVar(value="esjn")
         self.var_search_mode = tk.StringVar(value="Mode: idle")
         self.var_search_quality = tk.StringVar(value="Quality: raw=0 filtered=0 fallback=no pages=0")
-        self.var_collect_all_pages = tk.BooleanVar(value=True)
+        # Default to first page for faster interactive feedback; users can enable full pagination.
+        self.var_collect_all_pages = tk.BooleanVar(value=False)
         self.var_max_pages = tk.StringVar(value="5")
         self.var_strict_filter = tk.BooleanVar(value=True)
         self.var_match_mode = tk.StringVar(value="contains")
@@ -105,6 +108,7 @@ class TenderSearchFrame(ttk.Frame):
         self.audit_file = Path.cwd() / "compliance" / "audit" / "events.jsonl"
         self.driver = None
         self.wait = None
+        self._driver_lock = threading.Lock()
         self._build_ui()
 
     def _build_ui(self):
@@ -139,7 +143,7 @@ class TenderSearchFrame(ttk.Frame):
         ttk.Label(top, text="Download folder:").grid(row=1, column=0, sticky="w")
         ttk.Entry(top, textvariable=self.var_download, width=60).grid(row=1, column=1, columnspan=4, sticky="we")
         ttk.Button(top, text="Browse...", command=self.choose_dir).grid(row=1, column=5, sticky="w")
-        ttk.Checkbutton(top, text="Headless", variable=self.var_headless).grid(
+        ttk.Checkbutton(top, text="Headless (always on)", variable=self.var_headless, state="disabled").grid(
             row=1, column=6, sticky="w", padx=(8, 0)
         )
         ttk.Checkbutton(top, text="Collect all pages", variable=self.var_collect_all_pages).grid(
@@ -162,6 +166,7 @@ class TenderSearchFrame(ttk.Frame):
 
         btns = ttk.Frame(self)
         btns.pack(fill="x", padx=8, pady=(0, 8))
+        ttk.Button(btns, text="Connect", command=self.on_connect).pack(side="left")
         ttk.Button(btns, text="Search", command=self.on_search).pack(side="left")
         ttk.Button(btns, text="Download selected", command=self.on_download_selected).pack(
             side="left", padx=6
@@ -234,10 +239,25 @@ class TenderSearchFrame(ttk.Frame):
             self.var_download.set(selected)
 
     def ensure_driver(self):
-        if self.driver is None:
-            self.driver = setup_driver(self.var_headless.get(), self.var_download.get().strip())
-            self.wait = WebDriverWait(self.driver, 20)
+        with self._driver_lock:
+            if self.driver is None:
+                # Headless mode is enforced for every browser action.
+                self.var_headless.set(True)
+                self.driver = setup_driver(True, self.var_download.get().strip())
+                self.wait = WebDriverWait(self.driver, 20)
         return self.driver, self.wait
+
+    def on_connect(self):
+        def work():
+            t0 = time.perf_counter()
+            try:
+                driver, wait = self.ensure_driver()
+                ensure_on_notices(driver, wait)
+                self.log(f"INFO: Connected. ready_sec={time.perf_counter() - t0:.2f}")
+            except Exception as exc:
+                self.log(f"ERROR: Connect failed: {exc}")
+
+        threading.Thread(target=work, daemon=True).start()
 
     @staticmethod
     def _normalize_token_text(value: str) -> str:
@@ -377,6 +397,7 @@ class TenderSearchFrame(ttk.Frame):
                         attempts=3,
                         base_delay_sec=1.2,
                         snapshot_dir=snapshot_dir,
+                        max_total_wait_sec=8.0,
                     )
                     self.results = collect_tenders(driver, wait, self.log)
 
@@ -402,6 +423,7 @@ class TenderSearchFrame(ttk.Frame):
                             attempts=3,
                             base_delay_sec=1.2,
                             snapshot_dir=snapshot_dir,
+                            max_total_wait_sec=8.0,
                         )
                         self.results = collect_tenders(driver, wait, self.log)
 
@@ -424,6 +446,7 @@ class TenderSearchFrame(ttk.Frame):
                     used_fallback = True
 
                 raw_count = len(self.results)
+                raw_results = list(self.results)
                 if self.var_strict_filter.get():
                     self.results = self._post_filter_by_keyword(self.results, keyword)
                 filtered_count = len(self.results)
@@ -431,7 +454,7 @@ class TenderSearchFrame(ttk.Frame):
                     self.log(
                         "INFO: Strict post-filter matched 0 rows. Disable strict filter to inspect raw rows."
                     )
-                    for i, sample in enumerate(self.results[:3], start=1):
+                    for i, sample in enumerate(raw_results[:3], start=1):
                         txt = (sample.row_text or sample.title or "")[:220]
                         self.log(f"DEBUG_FILTER_SAMPLE[{i}]: {txt}")
                 self.results = stable_sort_tenders(self.results)
@@ -523,17 +546,25 @@ class TenderSearchFrame(ttk.Frame):
                     max_pages = 5
 
                 def prepare_download_scope() -> bool:
-                    for attempt in range(1, 3):
+                    # If search results are already present, reuse current context.
+                    try:
+                        if has_any_result_rows(driver):
+                            self.log("INFO: Reusing current results context for download scope.")
+                            return True
+                    except Exception:
+                        pass
+
+                    for attempt in range(1, 4):
                         try:
                             ensure_on_notices(driver, wait)
                             open_search_panel(driver, wait, self.log)
                             if keyword:
                                 search_keyword(driver, wait, keyword)
-                                wait_for_result_rows(
+                                found_rows = wait_for_result_rows(
                                     driver,
                                     wait,
                                     self.log,
-                                    attempts=2,
+                                    attempts=3,
                                     base_delay_sec=1.0,
                                     snapshot_dir=str(
                                         Path(
@@ -543,10 +574,15 @@ class TenderSearchFrame(ttk.Frame):
                                         / "debug"
                                     ),
                                 )
+                                if not found_rows:
+                                    raise RuntimeError("Search scope prepared but no rows became visible.")
+                            if not has_any_result_rows(driver):
+                                raise RuntimeError("Search scope contains no visible result rows.")
                             return True
                         except Exception as exc:
                             self.log(
-                                f"WARN: prepare_download_scope attempt {attempt}/2 failed: {type(exc).__name__}"
+                                f"WARN: prepare_download_scope attempt {attempt}/3 failed: "
+                                f"{type(exc).__name__}: {exc}"
                             )
                             time.sleep(1.0 * attempt)
                     return False
@@ -563,11 +599,18 @@ class TenderSearchFrame(ttk.Frame):
                     self.log(f"DOWNLOAD [{idx}/{len(selected)}] {title} ({institution}) [{deadline}]")
 
                     def op(_: int) -> int:
-                        if not prepare_download_scope():
-                            raise RuntimeError("Could not prepare search scope for download.")
                         found = find_dossier_on_pages(
                             driver, wait, dossier_id, self.log, max_pages=max_pages
                         )
+                        if not found:
+                            self.log(
+                                "INFO: Dossier not found in current context, rebuilding keyword scope."
+                            )
+                            if not prepare_download_scope():
+                                raise RuntimeError("Could not prepare search scope for download.")
+                            found = find_dossier_on_pages(
+                                driver, wait, dossier_id, self.log, max_pages=max_pages
+                            )
                         if not found:
                             raise RuntimeError(
                                 f"Dossier not found on first {max_pages} pages in current search scope: {dossier_id}"
@@ -703,7 +746,7 @@ class TenderSearchFrame(ttk.Frame):
     def apply_profile_data(self, data: dict) -> None:
         self.var_keyword.set(data.get("keyword", self.var_keyword.get()))
         self.var_download.set(data.get("download_dir", self.var_download.get()))
-        self.var_headless.set(bool(data.get("headless", self.var_headless.get())))
+        self.var_headless.set(True)
         self.var_username.set(data.get("username", self.var_username.get()))
         self.var_password.set(data.get("password", self.var_password.get()))
         self.var_role.set(data.get("role", self.var_role.get()))

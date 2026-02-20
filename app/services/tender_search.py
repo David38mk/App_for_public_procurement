@@ -13,6 +13,7 @@ from selenium.webdriver import Chrome
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 from webdriver_manager.chrome import ChromeDriverManager
@@ -41,6 +42,7 @@ class TenderRow:
 def setup_driver(headless: bool, download_dir: str) -> Chrome:
     os.makedirs(download_dir, exist_ok=True)
     opts = Options()
+    opts.page_load_strategy = "eager"
     if headless:
         opts.add_argument("--headless=new")
     opts.add_argument("--disable-gpu")
@@ -61,8 +63,16 @@ def setup_driver(headless: bool, download_dir: str) -> Chrome:
         "profile.default_content_setting_values.automatic_downloads": 1,
     }
     opts.add_experimental_option("prefs", prefs)
-    service = Service(ChromeDriverManager().install(), log_output=subprocess.DEVNULL)
-    return webdriver.Chrome(service=service, options=opts)
+    # Fast path: use Selenium Manager + local cache (usually faster than webdriver_manager checks).
+    try:
+        driver = webdriver.Chrome(options=opts)
+        driver.set_page_load_timeout(7)
+        return driver
+    except Exception:
+        service = Service(ChromeDriverManager().install(), log_output=subprocess.DEVNULL)
+        driver = webdriver.Chrome(service=service, options=opts)
+        driver.set_page_load_timeout(7)
+        return driver
 
 
 def js_click(driver: Chrome, element) -> None:
@@ -77,25 +87,122 @@ def wait_dom_ready(driver: Chrome, sec: int = 20) -> None:
 
 
 def ensure_on_notices(driver: Chrome, wait: WebDriverWait) -> None:
-    driver.get(BASE_URL)
+    # Ultra-fast path: if search controls are present, stay on current page context.
     try:
-        wait.until(lambda d: "/#/notices" in (d.current_url or ""))
-    except TimeoutException:
+        controls_ready = bool(
+            driver.execute_script(
+                """
+                const field = document.querySelector("input[ng-model='searchModel.Subject']");
+                const btn = document.querySelector("input[label-for-submit='SEARCH']");
+                if (!field || !btn) return false;
+                const fs = window.getComputedStyle(field);
+                const bs = window.getComputedStyle(btn);
+                const fv = fs && fs.display !== 'none' && fs.visibility !== 'hidden' && field.offsetParent !== null;
+                const bv = bs && bs.display !== 'none' && bs.visibility !== 'hidden' && btn.offsetParent !== null;
+                return fv && bv;
+                """
+            )
+        )
+        if controls_ready:
+            return
+    except Exception:
         pass
+
+    current_url = (driver.current_url or "").strip()
+    if "/#/notices" in current_url:
+        return
+    # Aggressive path: try SPA hash routing first (fastest when app shell is loaded).
+    try:
+        driver.execute_script(
+            """
+            if (!location.hash || location.hash !== '#/notices') {
+              location.hash = '#/notices';
+            }
+            """
+        )
+        WebDriverWait(driver, 1.8).until(lambda d: "/#/notices" in (d.current_url or ""))
+        return
+    except Exception:
+        pass
+
+    try:
+        driver.get(BASE_URL)
+    except TimeoutException:
+        # Continue with partial load; SPA shell is often enough for hash routing.
+        pass
+    try:
+        WebDriverWait(driver, 4).until(lambda d: "/#/notices" in (d.current_url or ""))
+    except TimeoutException:
+        try:
+            driver.execute_script("window.location.hash = '#/notices';")
+            WebDriverWait(driver, 2).until(lambda d: "/#/notices" in (d.current_url or ""))
+        except Exception:
+            pass
 
 
 def open_search_panel(driver: Chrome, wait: WebDriverWait, log: Callable[[str], None]) -> None:
+    panel_xpath = "//span[@label-for='SEARCH']"
+    field_xpath = "//input[@ng-model='searchModel.Subject']"
+    # Fast-path: if search field is already visible, panel is open.
     try:
-        panel = wait.until(
-            EC.presence_of_element_located((By.XPATH, "//span[@label-for='SEARCH']"))
-        )
-        js_click(driver, panel)
-        time.sleep(0.3)
+        if driver.find_elements(By.XPATH, field_xpath):
+            visible = driver.execute_script(
+                """
+                const el = document.evaluate(arguments[0], document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+                if (!el) return false;
+                const style = window.getComputedStyle(el);
+                return style && style.visibility !== 'hidden' && style.display !== 'none' && el.offsetParent !== null;
+                """,
+                field_xpath,
+            )
+            if visible:
+                return
+    except Exception:
+        pass
+
+    try:
+        panel = wait.until(EC.presence_of_element_located((By.XPATH, panel_xpath)))
     except TimeoutException:
         log("WARNING: Search panel button not found, continuing.")
+        return
+
+    for attempt in range(1, 4):
+        js_click(driver, panel)
+        # The menu animates open; wait until the subject field is truly visible.
+        try:
+            WebDriverWait(driver, 2.5).until(EC.visibility_of_element_located((By.XPATH, field_xpath)))
+            time.sleep(0.5)
+            return
+        except TimeoutException:
+            if attempt == 3:
+                log("WARNING: Search panel did not fully expand after retries.")
+            else:
+                time.sleep(0.4)
 
 
 def search_keyword(driver: Chrome, wait: WebDriverWait, keyword: str) -> None:
+    # Fast-path: exact controls from current e-nabavki notices page layout.
+    try:
+        field = WebDriverWait(driver, 2).until(
+            EC.visibility_of_element_located(
+                (By.XPATH, "//input[@ng-model='searchModel.Subject' and @place-holder-for='SUBJECT SEARCH']")
+            )
+        )
+        field.click()
+        field.send_keys(Keys.CONTROL, "a")
+        field.send_keys(Keys.DELETE)
+        field.send_keys(keyword)
+        btn = WebDriverWait(driver, 2).until(
+            EC.element_to_be_clickable(
+                (By.XPATH, "//input[@label-for-submit='SEARCH' and @ng-click='filter()']")
+            )
+        )
+        js_click(driver, btn)
+        time.sleep(0.8)
+        return
+    except TimeoutException:
+        pass
+
     field_xpaths = [
         "//input[@ng-model='searchModel.Subject']",
         "//input[@place-holder-for='SUBJECT SEARCH']",
@@ -112,7 +219,7 @@ def search_keyword(driver: Chrome, wait: WebDriverWait, keyword: str) -> None:
     field = None
     for xp in field_xpaths:
         try:
-            field = WebDriverWait(driver, 4).until(
+            field = WebDriverWait(driver, 2).until(
                 EC.visibility_of_element_located((By.XPATH, xp))
             )
             break
@@ -122,15 +229,34 @@ def search_keyword(driver: Chrome, wait: WebDriverWait, keyword: str) -> None:
     if field is None:
         raise TimeoutException("Search input field not found.")
 
-    field.clear()
+    field.click()
+    field.send_keys(Keys.CONTROL, "a")
+    field.send_keys(Keys.DELETE)
     field.send_keys(keyword)
+    time.sleep(0.2)
+
+    typed = (field.get_attribute("value") or "").strip()
+    if typed != (keyword or "").strip():
+        driver.execute_script(
+            """
+            const input = arguments[0];
+            const val = arguments[1];
+            input.value = val;
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+            """,
+            field,
+            keyword,
+        )
+        time.sleep(0.2)
 
     for xp in button_xpaths:
         try:
-            button = WebDriverWait(driver, 4).until(
+            button = WebDriverWait(driver, 2).until(
                 EC.element_to_be_clickable((By.XPATH, xp))
             )
             js_click(driver, button)
+            time.sleep(0.8)
             return
         except TimeoutException:
             continue
@@ -231,21 +357,30 @@ def wait_for_result_rows(
     attempts: int = 3,
     base_delay_sec: float = 1.0,
     snapshot_dir: str | None = None,
+    max_total_wait_sec: float = 10.0,
 ) -> bool:
-    for attempt in range(1, attempts + 1):
+    start = time.monotonic()
+    attempt = 0
+    while (time.monotonic() - start) < max_total_wait_sec:
+        attempt += 1
         if has_any_result_rows(driver):
             return True
+        # Very short DOM checks keep responsiveness high while allowing async rendering.
         for selector in ROW_SELECTORS:
             try:
-                WebDriverWait(driver, 5).until(
+                WebDriverWait(driver, 0.35).until(
                     EC.presence_of_element_located((By.CSS_SELECTOR, selector))
                 )
                 return True
             except TimeoutException:
                 continue
-        delay = base_delay_sec * attempt
-        log(f"INFO: No rows detected (attempt {attempt}/{attempts}), retrying in {delay:.1f}s.")
-        time.sleep(delay)
+        # Backoff is bounded by remaining budget and requested attempt budget.
+        attempt_scale = min(attempt, max(1, attempts))
+        delay = min(base_delay_sec * attempt_scale, 1.2)
+        remaining = max_total_wait_sec - (time.monotonic() - start)
+        if remaining <= 0:
+            break
+        time.sleep(min(delay, max(0.15, remaining)))
 
     if snapshot_dir:
         html_path, png_path = save_debug_snapshot(driver, snapshot_dir)
@@ -278,6 +413,38 @@ def collect_tenders(driver: Chrome, wait: WebDriverWait, log: Callable[[str], No
 
 
 def click_next_page(driver: Chrome, wait: WebDriverWait, log: Callable[[str], None]) -> bool:
+    # Fast-path: click next paginator using JS lookup before expensive XPath fallbacks.
+    try:
+        clicked = bool(
+            driver.execute_script(
+                """
+                const candidates = [
+                  "li.next:not(.disabled) a",
+                  "a[aria-label*='Next']:not(.disabled)",
+                  "button:not([disabled])",
+                  "a"
+                ];
+                for (const selector of candidates) {
+                  const nodes = Array.from(document.querySelectorAll(selector));
+                  for (const n of nodes) {
+                    const t = (n.innerText || n.value || "").trim();
+                    if (/^(Next|Следна)$/i.test(t) || (n.getAttribute("aria-label") || "").includes("Next")) {
+                      n.scrollIntoView({block:'center'});
+                      n.click();
+                      return true;
+                    }
+                  }
+                }
+                return false;
+                """
+            )
+        )
+        if clicked:
+            time.sleep(0.7)
+            return True
+    except Exception:
+        pass
+
     xpaths = [
         "//li[contains(@class,'next') and not(contains(@class,'disabled'))]/a",
         "//a[contains(@aria-label,'Next') and not(contains(@class,'disabled'))]",
@@ -288,9 +455,9 @@ def click_next_page(driver: Chrome, wait: WebDriverWait, log: Callable[[str], No
     ]
     for xp in xpaths:
         try:
-            btn = WebDriverWait(driver, 3).until(EC.element_to_be_clickable((By.XPATH, xp)))
+            btn = WebDriverWait(driver, 1).until(EC.element_to_be_clickable((By.XPATH, xp)))
             js_click(driver, btn)
-            time.sleep(1.0)
+            time.sleep(0.7)
             return True
         except Exception:
             continue
