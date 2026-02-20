@@ -1,0 +1,44 @@
+﻿requirement_id,source_file,category,hint_tag,requirement_text,evidence_expected,mandatory,source_pages,snippet,status
+REQ-AUTO-TECHNICAL-OFFER-001,образец_техничка_понуда (26).docx,technical_offer,technical_offer,Provide evidence for 'техничка понуда' derived from tender context.,technical_offer,yes,,Техничка понуда Согласни сме да ги понудиме следниве Работи : Предмет на набавка – Изградба на собирна улица С2 улица Новопроектирана 1 -„ Источноколекторска “ во град Струга - прва фаза Реден број Назив Минимални технич,draft_from_upload_hints
+REQ-AUTO-TECHNICAL-OFFER-001,образец_техничка_понуда (3).docx,technical_offer,technical_offer,Provide evidence for 'техничка понуда' derived from tender context.,technical_offer,yes,,Техничка понуда Согласни сме да ги понудиме следниве Услуги : Предмет на набавка – Фиксна телефонија и интернет Реден број Назив Минимални технички карактеристики Понудени технички карактеристики 1 Тарифен модел -Пакет 1,draft_from_upload_hints
+REQ-AUTO-TECHNICAL-OFFER-001,образец_техничка_понуда (4).docx,technical_offer,technical_offer,Provide evidence for 'техничка понуда' derived from tender context.,technical_offer,yes,,"Техничка понуда Согласни сме да ги понудиме следниве Услуги : Предмет на набавка – Мобила,фиксна телефонија и интернет за период од две години Дел 1 - Предмет на дел: ДЕЛ 1: УСЛУГИ ОД МОБИЛНА ТЕЛЕФОНИЈА Реден број Назив",draft_from_upload_hints
+REQ-AUTO-DECLARATION-STATEMENT-002,тендерска_документација_01332-2026_20260206132608.pdf,declaration,declaration_statement,Provide evidence for 'изјава' derived from tender context.,declaration_statement,yes,"11,16","11
+изјава за сериозност на понудата 
+лиценца/дозвола/потврда како доказ дека се исполнети посебните услови за вршење на 
+дејноста пропишани со закон
+4.4.Подизведување
+4.4.1.Понудувачот може дел од договорот за јавна на",draft_from_upload_hints
+REQ-AUTO-PROOF-DOCUMENT-001,тендерска_документација_01332-2026_20260206132608.pdf,evidence,proof_document,Provide evidence for 'доказ за' derived from tender context.,proof_document,yes,16,"16
+носивост и копија од сообраќајна дозвола со доказ дека истите се во употреба,
+- За Ваљаци - потребно е да се достави доказ за сопственост или доказ за обезбеден пристап до
+истите согласно Законот за јавните набавки, И",draft_from_upload_hints
+REQ-AUTO-LICENSE-002,тендерска_документација_01332-2026_20260206132608.pdf,qualification,license,Provide evidence for 'лиценца' derived from tender context.,license,yes,"11,14","11
+изјава за сериозност на понудата 
+лиценца/дозвола/потврда како доказ дека се исполнети посебните услови за вршење на 
+дејноста пропишани со закон
+4.4.Подизведување
+4.4.1.Понудувачот може дел од договорот за јавна на",draft_from_upload_hints
+REQ-AUTO-CERTIFICATE-001,тендерска_документација_01396-2026_20260209083938.pdf,qualification,certificate,Provide evidence for 'сертификат' derived from tender context.,certificate,yes,10,"4.1.6.Понудата се поднесува во електронска форма преку ЕСЈН и истата треба да биде електронски 
+потпишана со користење на квалификуван сертификат за електронски потпис од одговорното лице 
+на економскиот оператор или лиц",draft_from_upload_hints
+REQ-AUTO-CERTIFICATE-003,тендерска_документација_01606-2026_20260212094153 (1).pdf,qualification,certificate,Provide evidence for 'сертификат' derived from tender context.,certificate,yes,"14,7,9","3.1.8. За да учествува во постапката, економскиот оператор треба да се регистрира во ЕСЈН и да 
+поседува квалификуван сертификат за електронски потпис согласно прописите за електронски 
+потпис. Економскиот оператор се ре",draft_from_upload_hints
+REQ-AUTO-CERTIFICATE-003,тендерска_документација_01606-2026_20260212094153.pdf,qualification,certificate,Provide evidence for 'сертификат' derived from tender context.,certificate,yes,"14,7,9","3.1.8. За да учествува во постапката, економскиот оператор треба да се регистрира во ЕСЈН и да 
+поседува квалификуван сертификат за електронски потпис согласно прописите за електронски 
+потпис. Економскиот оператор се ре",draft_from_upload_hints
+REQ-AUTO-CERTIFICATE-001,тендерска_документација_02313-2026_20260219140857 (1).pdf,qualification,certificate,Provide evidence for 'сертификат' derived from tender context.,certificate,yes,7,"4.1.4.Цената на понудата се изразува за вкупниот предмет на набавка.
+4.1.5.Понудувачот може да ја измени, замени или да ја повлече својата понуда пред истекот на 
+крајниот рок за поднесување на понудите.
+4.1.6.Понудата с",draft_from_upload_hints
+REQ-AUTO-CERTIFICATE-001,тендерска_документација_02313-2026_20260219140857.pdf,qualification,certificate,Provide evidence for 'сертификат' derived from tender context.,certificate,yes,7,"4.1.4.Цената на понудата се изразува за вкупниот предмет на набавка.
+4.1.5.Понудувачот може да ја измени, замени или да ја повлече својата понуда пред истекот на 
+крајниот рок за поднесување на понудите.
+4.1.6.Понудата с",draft_from_upload_hints
+REQ-AUTO-DECLARATION-STATEMENT-003,тендерска_документација_02335-2026_20260219152806.pdf,declaration,declaration_statement,Provide evidence for 'изјава' derived from tender context.,declaration_statement,yes,"11,13,9","3.7.1.Понудата треба да е со важност од 120 дена.
+3.7.2.Договорниот орган може, во исклучителни случаи кои не настанале по негова вина, да 
+побара од понудувачите продолжување на периодот на важност на понудите.
+3.8.Сред",draft_from_upload_hints
+REQ-AUTO-CERTIFICATE-001,тендерска_документација_02335-2026_20260219152806.pdf,qualification,certificate,Provide evidence for 'сертификат' derived from tender context.,certificate,yes,11,"Економскиот оператор во прилог на понудата доставува изјава за докажување на 
+способноста или документи за утврдување способност. Во случај економскиот оператор да 
+достави и изјава за докажување на способноста и докумен",draft_from_upload_hints

@@ -1,0 +1,18 @@
+requirement_id,category,requirement_text,evidence_expected,mandatory,source_section,status
+REQ-01606-PRICE-001,pricing,Offer price in MKD with VAT separated; evaluation without VAT,priced_offer_form,yes,3.4,draft_verified_by_human
+REQ-01606-GUAR-001,guarantee,Performance guarantee 5 percent of contract value,bank_guarantee_performance,yes,3.8.2,draft_verified_by_human
+REQ-01606-DEADLINE-001,timeline,Bid submitted by deadline 27.02.2026 10:00,bid_submission_timestamp,yes,4.2.1,draft_verified_by_human
+REQ-01606-EXCL-001,exclusion,No exclusion grounds statement,signed_no_exclusion_statement,yes,5.2.4,draft_verified_by_human
+REQ-01606-TAX-001,exclusion,Certificate for paid taxes and public duties,tax_clearance_certificate,yes,5.2.4,draft_verified_by_human
+REQ-01606-BANKR-001,exclusion,Certificate no bankruptcy proceeding,bankruptcy_clearance_certificate,yes,5.2.4,draft_verified_by_human
+REQ-01606-LIQ-001,exclusion,Certificate no liquidation proceeding,liquidation_clearance_certificate,yes,5.2.4,draft_verified_by_human
+REQ-01606-PROF-001,qualification,Proof of registered professional activity,registered_activity_proof,yes,5.3.1,draft_verified_by_human
+REQ-01606-TECH-001,qualification,Technical and professional capability statement + proofs,technical_capability_statement,yes,5.3.2,draft_verified_by_human
+REQ-01606-CERT-CCIE-001,qualification,Minimum one CCIE or equivalent,ccie_certificate,yes,5.3.2.1,draft_verified_by_human
+REQ-01606-CERT-CCNPSEC-001,qualification,Minimum two CCNP Security or equivalent,ccnp_security_certificates,yes,5.3.2.1,draft_verified_by_human
+REQ-01606-CERT-PMP-001,qualification,Minimum one PMP or PRINCE or equivalent,project_management_certificate,yes,5.3.2.1,draft_verified_by_human
+REQ-01606-CERT-ITIL-001,qualification,Minimum one ITIL IT service management or equivalent,itil_certificate,yes,5.3.2.1,draft_verified_by_human
+REQ-01606-CERT-CCNPENT-001,qualification,Minimum two CCNP Enterprise or equivalent,ccnp_enterprise_certificates,yes,5.3.2.1,draft_verified_by_human
+REQ-01606-ISO-27001-001,quality,ISO 27001 2022 or equivalent,iso_27001_certificate,yes,5.4.1,draft_verified_by_human
+REQ-01606-ISO-20000-001,quality,ISO 20000-1 2018 or equivalent,iso_20000_1_certificate,yes,5.4.1,draft_verified_by_human
+REQ-01606-ISO-22301-001,quality,ISO 22301 2019 or equivalent,iso_22301_certificate,yes,5.4.1,draft_verified_by_human

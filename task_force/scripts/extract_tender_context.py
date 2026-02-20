@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 import xml.etree.ElementTree as ET
+from openpyxl import Workbook
 
 try:
     from pypdf import PdfReader  # type: ignore
@@ -164,6 +165,53 @@ def build_upload_hints(hits: list[ContextHit]) -> list[dict[str, str]]:
     return list(unique.values())
 
 
+def build_requirements_template_rows(upload_rows: list[dict[str, str]]) -> list[dict[str, str]]:
+    tag_to_category = {
+        "bank_guarantee": "guarantee",
+        "declaration_statement": "declaration",
+        "certificate": "qualification",
+        "license": "qualification",
+        "technical_offer": "technical_offer",
+        "financial_offer": "financial_offer",
+        "reference_list": "qualification",
+        "proof_document": "evidence",
+    }
+
+    grouped: dict[tuple[str, str], list[dict[str, str]]] = {}
+    for row in upload_rows:
+        key = (row.get("file", "").strip(), row.get("tag", "").strip())
+        grouped.setdefault(key, []).append(row)
+
+    out: list[dict[str, str]] = []
+    for (file_name, tag), rows in grouped.items():
+        if not tag:
+            continue
+        category = tag_to_category.get(tag, "evidence")
+        terms = sorted({(r.get("term") or "").strip() for r in rows if (r.get("term") or "").strip()})
+        source_pages = sorted({(r.get("source_page") or "").strip() for r in rows if (r.get("source_page") or "").strip()})
+        snippets = [r.get("snippet", "").strip() for r in rows if (r.get("snippet") or "").strip()]
+        hint_text = "; ".join(terms[:4]) if terms else tag
+        snippet = snippets[0] if snippets else ""
+        req_id = f"REQ-AUTO-{re.sub(r'[^A-Za-z0-9]+', '-', tag).strip('-').upper()}-{len(rows):03d}"
+        out.append(
+            {
+                "requirement_id": req_id,
+                "source_file": file_name,
+                "category": category,
+                "hint_tag": tag,
+                "requirement_text": f"Provide evidence for '{hint_text}' derived from tender context.",
+                "evidence_expected": tag,
+                "mandatory": "yes",
+                "source_pages": ",".join(source_pages),
+                "snippet": snippet[:280],
+                "status": "draft_from_upload_hints",
+            }
+        )
+
+    out.sort(key=lambda x: (x["source_file"], x["category"], x["hint_tag"]))
+    return out
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Extract tender context and likely 'Услови' obligations.")
     parser.add_argument("--input-dir", default="downloads", help="Directory with downloaded tender docs.")
@@ -238,13 +286,44 @@ def main() -> int:
     json_path = out_dir / f"tender_context_{stamp}.json"
     md_path = out_dir / f"tender_context_{stamp}.md"
     csv_path = out_dir / f"upload_hints_{stamp}.csv"
+    xlsx_path = out_dir / f"upload_hints_{stamp}.xlsx"
+    requirements_path = out_dir / f"upload_requirements_template_{stamp}.csv"
 
     json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    with csv_path.open("w", encoding="utf-8", newline="") as fh:
+    # utf-8-sig keeps Cyrillic readable when opened directly in Excel on Windows.
+    with csv_path.open("w", encoding="utf-8-sig", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=["file", "tag", "term", "source_page", "snippet"])
         writer.writeheader()
         writer.writerows(csv_rows)
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "upload_hints"
+    ws.append(["file", "tag", "term", "source_page", "snippet"])
+    for row in csv_rows:
+        ws.append([row["file"], row["tag"], row["term"], row["source_page"], row["snippet"]])
+    wb.save(xlsx_path)
+
+    req_rows = build_requirements_template_rows(csv_rows)
+    with requirements_path.open("w", encoding="utf-8-sig", newline="") as fh:
+        writer = csv.DictWriter(
+            fh,
+            fieldnames=[
+                "requirement_id",
+                "source_file",
+                "category",
+                "hint_tag",
+                "requirement_text",
+                "evidence_expected",
+                "mandatory",
+                "source_pages",
+                "snippet",
+                "status",
+            ],
+        )
+        writer.writeheader()
+        writer.writerows(req_rows)
 
     lines = [
         f"# Tender Context Pack ({stamp})",
@@ -264,6 +343,7 @@ def main() -> int:
             "",
             "## Next Use",
             "- Review `upload_hints_*.csv` to map detected obligations to actual upload slots on submit-bid page.",
+            "- Review `upload_requirements_template_*.csv` generated from current upload hints (same extraction run).",
             "- Keep all items as draft obligations until manual legal/SME confirmation.",
         ]
     )
@@ -272,6 +352,8 @@ def main() -> int:
     print(f"JSON: {json_path}")
     print(f"MD:   {md_path}")
     print(f"CSV:  {csv_path}")
+    print(f"XLSX: {xlsx_path}")
+    print(f"REQ:  {requirements_path}")
     return 0
 
 

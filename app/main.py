@@ -291,6 +291,7 @@ class TenderSearchFrame(ttk.Frame):
                 self.log("INFO: Tender context extraction completed.")
                 if auto_open_hints:
                     self.on_open_latest_upload_hints(notify_if_missing=False)
+                    self.on_open_latest_requirements_template(notify_if_missing=False)
             except Exception as exc:
                 self.log(f"ERROR: Context extraction failed: {exc}")
                 if notify_errors:
@@ -300,7 +301,9 @@ class TenderSearchFrame(ttk.Frame):
 
     def on_open_latest_upload_hints(self, notify_if_missing: bool = True):
         out_dir = Path.cwd() / "task_force" / "out" / "tender_context"
-        files = sorted(out_dir.glob("upload_hints_*.csv"), key=lambda p: p.stat().st_mtime, reverse=True)
+        xlsx_files = sorted(out_dir.glob("upload_hints_*.xlsx"), key=lambda p: p.stat().st_mtime, reverse=True)
+        csv_files = sorted(out_dir.glob("upload_hints_*.csv"), key=lambda p: p.stat().st_mtime, reverse=True)
+        files = xlsx_files if xlsx_files else csv_files
         if not files:
             self.log(f"INFO: No upload hints found in: {out_dir}")
             if notify_if_missing:
@@ -316,6 +319,30 @@ class TenderSearchFrame(ttk.Frame):
         except Exception as exc:
             self.log(f"ERROR: Could not open hints file: {exc}")
             messagebox.showerror("Open failed", str(exc))
+
+    def on_open_latest_requirements_template(self, notify_if_missing: bool = True):
+        out_dir = Path.cwd() / "task_force" / "out" / "tender_context"
+        files = sorted(
+            out_dir.glob("upload_requirements_template_*.csv"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        if not files:
+            self.log(f"INFO: No upload requirements template found in: {out_dir}")
+            if notify_if_missing:
+                messagebox.showinfo("No template", f"No requirements template found in:\n{out_dir}")
+            return
+        latest = files[0]
+        try:
+            if os.name == "nt":
+                os.startfile(str(latest))
+            else:
+                messagebox.showinfo("Latest requirements template", str(latest))
+            self.log(f"INFO: Opened requirements template: {latest.name}")
+        except Exception as exc:
+            self.log(f"ERROR: Could not open requirements template: {exc}")
+            if notify_if_missing:
+                messagebox.showerror("Open failed", str(exc))
 
     @staticmethod
     def _normalize_token_text(value: str) -> str:
