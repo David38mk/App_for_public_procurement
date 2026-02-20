@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 import unicodedata
+from collections import Counter
 from pathlib import Path
 
 import tkinter as tk
@@ -107,6 +108,7 @@ class TenderSearchFrame(ttk.Frame):
         self.var_match_mode = tk.StringVar(value="contains")
         self.results: list[TenderRow] = []
         self.last_search_context: dict | None = None
+        self.last_active_tender_id: str | None = None
         self.audit_file = Path.cwd() / "compliance" / "audit" / "events.jsonl"
         self.driver = None
         self.wait = None
@@ -271,6 +273,10 @@ class TenderSearchFrame(ttk.Frame):
                 "--max-files",
                 "12",
             ]
+            active_tender_id = self._resolve_active_tender_id_from_selection_or_cache()
+            if active_tender_id:
+                cmd.extend(["--tender-id", active_tender_id])
+                self.log(f"INFO: Context extraction scoped to tender: {active_tender_id}")
             try:
                 result = subprocess.run(
                     cmd,
@@ -280,7 +286,11 @@ class TenderSearchFrame(ttk.Frame):
                     check=False,
                 )
                 if result.stdout.strip():
-                    for line in result.stdout.strip().splitlines():
+                    lines_to_log = self._filter_context_stdout_lines(
+                        result.stdout.strip().splitlines(),
+                        active_tender_id,
+                    )
+                    for line in lines_to_log:
                         self.log(f"CTX: {line}")
                 if result.returncode != 0:
                     if result.stderr.strip():
@@ -299,10 +309,54 @@ class TenderSearchFrame(ttk.Frame):
 
         threading.Thread(target=work, daemon=True).start()
 
+    @staticmethod
+    def _filter_context_stdout_lines(lines: list[str], tender_id: str | None) -> list[str]:
+        if not lines:
+            return lines
+        if not tender_id:
+            return lines
+
+        blocks: list[list[str]] = []
+        current: list[str] = []
+        for raw in lines:
+            line = raw.strip()
+            if line.startswith("TENDER: "):
+                if current:
+                    blocks.append(current)
+                current = [line]
+            elif current:
+                current.append(line)
+        if current:
+            blocks.append(current)
+
+        if not blocks:
+            return lines
+        wanted = f"TENDER: {tender_id}"
+        for block in blocks:
+            if block and block[0] == wanted:
+                return block
+        return blocks[0]
+
     def on_open_latest_upload_hints(self, notify_if_missing: bool = True):
         out_dir = Path.cwd() / "task_force" / "out" / "tender_context"
-        xlsx_files = sorted(out_dir.glob("upload_hints_*.xlsx"), key=lambda p: p.stat().st_mtime, reverse=True)
-        csv_files = sorted(out_dir.glob("upload_hints_*.csv"), key=lambda p: p.stat().st_mtime, reverse=True)
+        tender_id = self._resolve_active_tender_id_from_selection_or_cache()
+        xlsx_files: list[Path] = []
+        csv_files: list[Path] = []
+        if tender_id:
+            slug = tender_id.replace("-", "_")
+            xlsx_files = sorted(
+                out_dir.glob(f"upload_hints_{slug}_*.xlsx"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            csv_files = sorted(
+                out_dir.glob(f"upload_hints_{slug}_*.csv"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+        if not xlsx_files and not csv_files:
+            xlsx_files = sorted(out_dir.glob("upload_hints_*.xlsx"), key=lambda p: p.stat().st_mtime, reverse=True)
+            csv_files = sorted(out_dir.glob("upload_hints_*.csv"), key=lambda p: p.stat().st_mtime, reverse=True)
         files = xlsx_files if xlsx_files else csv_files
         if not files:
             self.log(f"INFO: No upload hints found in: {out_dir}")
@@ -322,11 +376,21 @@ class TenderSearchFrame(ttk.Frame):
 
     def on_open_latest_requirements_template(self, notify_if_missing: bool = True):
         out_dir = Path.cwd() / "task_force" / "out" / "tender_context"
-        files = sorted(
-            out_dir.glob("upload_requirements_template_*.csv"),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True,
-        )
+        tender_id = self._resolve_active_tender_id_from_selection_or_cache()
+        files: list[Path] = []
+        if tender_id:
+            slug = tender_id.replace("-", "_")
+            files = sorted(
+                out_dir.glob(f"upload_requirements_template_{slug}_*.csv"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+        if not files:
+            files = sorted(
+                out_dir.glob("upload_requirements_template_*.csv"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
         if not files:
             self.log(f"INFO: No upload requirements template found in: {out_dir}")
             if notify_if_missing:
@@ -349,6 +413,62 @@ class TenderSearchFrame(ttk.Frame):
         text = unicodedata.normalize("NFKC", value or "").lower()
         text = re.sub(r"[^0-9a-zа-ш]+", " ", text, flags=re.IGNORECASE)
         return re.sub(r"\s+", " ", text).strip()
+
+    @staticmethod
+    def _extract_tender_id(value: str) -> str | None:
+        txt = (value or "").strip()
+        m = re.search(r"(?<!\d)(\d{5})[-/](\d{4})(?!\d)", txt)
+        if not m:
+            return None
+        return f"{m.group(1)}-{m.group(2)}"
+
+    def _resolve_active_tender_id_from_selection_or_cache(self) -> str | None:
+        selected = self.tree.selection()
+        ids: set[str] = set()
+        for item_id in selected:
+            try:
+                dossier = str(self.tree.item(item_id)["values"][4])
+            except Exception:
+                dossier = ""
+            tid = self._extract_tender_id(dossier)
+            if tid:
+                ids.add(tid)
+        if len(ids) == 1:
+            tid = next(iter(ids))
+            self.last_active_tender_id = tid
+            return tid
+        if self.last_active_tender_id:
+            return self.last_active_tender_id
+        return None
+
+    def _infer_recent_tender_id_from_downloads(self, lookback_seconds: int = 900) -> str | None:
+        download_dir = Path(self.var_download.get().strip() or str(Path.cwd() / "downloads"))
+        if not download_dir.exists():
+            return None
+        now_ts = time.time()
+        matches: list[tuple[str, float]] = []
+        for p in download_dir.iterdir():
+            if not p.is_file():
+                continue
+            try:
+                mtime = p.stat().st_mtime
+            except OSError:
+                continue
+            if (now_ts - mtime) > lookback_seconds:
+                continue
+            tid = self._extract_tender_id(p.name)
+            if tid:
+                matches.append((tid, mtime))
+        if not matches:
+            return None
+        counts = Counter(t for t, _ in matches)
+        latest_by_tid: dict[str, float] = {}
+        for tid, ts in matches:
+            prev = latest_by_tid.get(tid, 0.0)
+            if ts > prev:
+                latest_by_tid[tid] = ts
+        ranked = sorted(counts.keys(), key=lambda t: (counts[t], latest_by_tid.get(t, 0.0)), reverse=True)
+        return ranked[0] if ranked else None
 
     @staticmethod
     def _cyr_to_lat(value: str) -> str:
@@ -783,6 +903,10 @@ class TenderSearchFrame(ttk.Frame):
                         },
                     )
                 self.log(f"DONE: Started downloads: {total_started}")
+                inferred_tid = self._infer_recent_tender_id_from_downloads()
+                if inferred_tid:
+                    self.last_active_tender_id = inferred_tid
+                    self.log(f"INFO: Active tender inferred from recent downloads: {inferred_tid}")
                 self.on_extract_tender_context(auto_open_hints=True, notify_errors=False)
             except Exception as exc:
                 self.log(f"ERROR: Download failed: {exc}")

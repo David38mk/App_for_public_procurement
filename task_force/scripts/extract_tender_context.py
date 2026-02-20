@@ -6,11 +6,14 @@ import csv
 import json
 import re
 import zipfile
+from difflib import SequenceMatcher
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 import xml.etree.ElementTree as ET
+from xml.sax.saxutils import escape
+
 from openpyxl import Workbook
 
 try:
@@ -21,43 +24,75 @@ except Exception:  # pragma: no cover
 
 DOC_EXTENSIONS = {".pdf", ".docx"}
 EXCLUDE_DIR_TOKENS = {"debug"}
+TENDER_ID_RE = re.compile(r"(?<!\d)(\d{5})[-/](\d{4})(?!\d)")
+HEADING_LINE_RE = re.compile(r"^\s*(\d+(?:\.\d+){0,3})\.?\s*(.*)$")
 
 KEYWORDS = [
-    "услов",
-    "услови",
-    "доказ",
-    "документ",
-    "документи",
-    "критериум",
-    "критериуми",
-    "понудувач",
-    "економски оператор",
-    "обврзан",
-    "должен",
-    "мора",
-    "изјава",
-    "гаранција",
-    "рок",
-    "техничка понуда",
+    "\u0443\u0441\u043b\u043e\u0432",
+    "\u0443\u0441\u043b\u043e\u0432\u0438",
+    "\u0434\u043e\u043a\u0430\u0437",
+    "\u0434\u043e\u043a\u0443\u043c\u0435\u043d\u0442",
+    "\u043a\u0440\u0438\u0442\u0435\u0440\u0438\u0443\u043c",
+    "\u043f\u043e\u043d\u0443\u0434\u0443\u0432\u0430\u0447",
+    "\u0435\u043a\u043e\u043d\u043e\u043c\u0441\u043a\u0438 \u043e\u043f\u0435\u0440\u0430\u0442\u043e\u0440",
+    "\u0438\u0437\u0458\u0430\u0432\u0430",
+    "\u0433\u0430\u0440\u0430\u043d\u0446\u0438\u0458\u0430",
+    "\u0442\u0435\u0445\u043d\u0438\u0447\u043a\u0430 \u043f\u043e\u043d\u0443\u0434\u0430",
 ]
 
 UPLOAD_DOC_HINTS = [
-    ("банкарска гаранција", "bank_guarantee"),
-    ("изјава", "declaration_statement"),
-    ("сертификат", "certificate"),
-    ("лиценца", "license"),
-    ("техничка понуда", "technical_offer"),
-    ("финансиска понуда", "financial_offer"),
-    ("референтна листа", "reference_list"),
-    ("доказ за", "proof_document"),
+    ("\u0431\u0430\u043d\u043a\u0430\u0440\u0441\u043a\u0430 \u0433\u0430\u0440\u0430\u043d\u0446\u0438\u0458\u0430", "bank_guarantee"),
+    ("\u0438\u0437\u0458\u0430\u0432\u0430", "declaration_statement"),
+    ("\u0441\u0435\u0440\u0442\u0438\u0444\u0438\u043a\u0430\u0442", "certificate"),
+    ("\u043b\u0438\u0446\u0435\u043d\u0446\u0430", "license"),
+    ("\u0442\u0435\u0445\u043d\u0438\u0447\u043a\u0430 \u043f\u043e\u043d\u0443\u0434\u0430", "technical_offer"),
+    ("\u0444\u0438\u043d\u0430\u043d\u0441\u0438\u0441\u043a\u0430 \u043f\u043e\u043d\u0443\u0434\u0430", "financial_offer"),
+    ("\u0440\u0435\u0444\u0435\u0440\u0435\u043d\u0442\u043d\u0430 \u043b\u0438\u0441\u0442\u0430", "reference_list"),
+    ("\u0434\u043e\u043a\u0430\u0437 \u0437\u0430", "proof_document"),
 ]
+
+# Union of sections requested by user across tenders.
+TARGET_SECTIONS = [
+    "1.3",
+    "1.5",
+    "1.6.1",
+    "1.6.1.1",
+    "3.4",
+    "3.9",
+    "3.10",
+    "4",
+    "4.2",
+    "4.2.4",
+    "4.3",
+    "4.3.1",
+    "4.3.2",
+    "4.4",
+    "5",
+    "5.1",
+    "5.2",
+    "5.3",
+]
+
+MANUAL_REVIEW_FLAG = "\u041f\u0440\u043e\u0432\u0435\u0440\u0438 \u0440\u0430\u0447\u043d\u043e"
+MAX_HIDDEN_TECH_SPEC_ITEMS = 10
+INSTITUTION_BLOCKLIST = (
+    "\u043c\u0438\u043d\u0438\u0441\u0442\u0435\u0440\u0441\u0442\u0432\u043e\u0442\u043e \u0437\u0430 \u0444\u0438\u043d\u0430\u043d\u0441\u0438\u0438",
+    "\u0443\u0458\u043f",
+    "\u0443\u043f\u0440\u0430\u0432\u0430 \u0437\u0430 \u0458\u0430\u0432\u043d\u0438 \u043f\u0440\u0438\u0445\u043e\u0434\u0438",
+    "\u0434\u0430\u043d\u043e\u0446\u0438",
+)
 
 
 @dataclass
-class ContextHit:
-    keyword: str
-    snippet: str
-    page: int | None
+class ParsedFile:
+    path: Path
+    kind: str
+    text: str
+    pages: list[str]
+    tender_id: str | None
+    hit_count: int
+    hits: list[dict[str, Any]]
+    upload_hints: list[dict[str, str]]
 
 
 def normalize_text(text: str) -> str:
@@ -74,8 +109,7 @@ def extract_docx_text(path: Path) -> str:
         for name in xml_names:
             if not any(k in name for k in ("document.xml", "header", "footer")):
                 continue
-            data = zf.read(name)
-            root = ET.fromstring(data)
+            root = ET.fromstring(zf.read(name))
             texts = [node.text or "" for node in root.findall(".//{*}t")]
             merged = " ".join(t.strip() for t in texts if t and t.strip())
             if merged:
@@ -94,39 +128,24 @@ def extract_pdf_text(path: Path) -> tuple[str, list[str]]:
 
 
 def split_paragraphs(text: str) -> list[str]:
-    out = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
-    return out
-
-
-def find_hits(paragraphs: list[str], pages: list[str] | None = None) -> list[ContextHit]:
-    hits: list[ContextHit] = []
-    for para in paragraphs:
-        para_l = para.lower()
-        for kw in KEYWORDS:
-            if kw in para_l:
-                page_no: int | None = None
-                if pages:
-                    for idx, pg in enumerate(pages, start=1):
-                        if para[:80] and para[:80] in pg:
-                            page_no = idx
-                            break
-                snippet = para[:500]
-                hits.append(ContextHit(keyword=kw, snippet=snippet, page=page_no))
-                break
-    return hits
+    return [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
 
 
 def score_filename(path: Path) -> int:
     name = path.name.lower()
     score = 0
-    if "тендер" in name:
+    if "\u0442\u0435\u043d\u0434\u0435\u0440" in name:
+        score += 6
+    if "\u0434\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u0430\u0446" in name:
+        score += 6
+    if "\u0442\u0435\u0445\u043d\u0438\u0447\u043a\u0430 \u0441\u043f\u0435\u0446\u0438\u0444\u0438\u043a\u0430\u0446" in name:
         score += 5
-    if "документација" in name:
-        score += 5
-    if "техничка" in name:
+    if "\u0442\u0435\u0445\u043d\u0438\u0447\u043a\u0430" in name:
         score += 3
-    if "услов" in name:
+    if "\u0443\u0441\u043b\u043e\u0432" in name:
         score += 4
+    if path.suffix.lower() == ".pdf":
+        score += 1
     return score
 
 
@@ -144,83 +163,855 @@ def collect_candidates(input_dir: Path) -> list[Path]:
     return files
 
 
-def build_upload_hints(hits: list[ContextHit]) -> list[dict[str, str]]:
+def find_hits(paragraphs: list[str], pages: list[str] | None = None) -> list[dict[str, Any]]:
+    hits: list[dict[str, Any]] = []
+    for para in paragraphs:
+        low = para.lower()
+        for kw in KEYWORDS:
+            if kw in low:
+                page_no: int | None = None
+                if pages:
+                    for idx, pg in enumerate(pages, start=1):
+                        if para[:80] and para[:80] in pg:
+                            page_no = idx
+                            break
+                hits.append({"keyword": kw, "page": page_no, "snippet": para[:500]})
+                break
+    return hits
+
+
+def build_upload_hints(hits: list[dict[str, Any]]) -> list[dict[str, str]]:
     out: list[dict[str, str]] = []
     for hit in hits:
-        txt = hit.snippet.lower()
+        txt = (hit.get("snippet") or "").lower()
         for term, tag in UPLOAD_DOC_HINTS:
             if term in txt:
                 out.append(
                     {
                         "tag": tag,
                         "term": term,
-                        "source_page": str(hit.page or ""),
-                        "snippet": hit.snippet[:220],
+                        "source_page": str(hit.get("page") or ""),
+                        "snippet": (hit.get("snippet") or "")[:220],
                     }
                 )
-    # Deduplicate by (tag, snippet)
     unique: dict[tuple[str, str], dict[str, str]] = {}
     for item in out:
         unique[(item["tag"], item["snippet"])] = item
     return list(unique.values())
 
 
-def build_requirements_template_rows(upload_rows: list[dict[str, str]]) -> list[dict[str, str]]:
-    tag_to_category = {
-        "bank_guarantee": "guarantee",
-        "declaration_statement": "declaration",
-        "certificate": "qualification",
-        "license": "qualification",
-        "technical_offer": "technical_offer",
-        "financial_offer": "financial_offer",
-        "reference_list": "qualification",
-        "proof_document": "evidence",
-    }
+def detect_tender_id(path: Path, text: str) -> str | None:
+    m = TENDER_ID_RE.search(path.name)
+    if m:
+        return f"{m.group(1)}-{m.group(2)}"
+    m = TENDER_ID_RE.search(text[:3000])
+    if m:
+        return f"{m.group(1)}-{m.group(2)}"
+    return None
 
-    grouped: dict[tuple[str, str], list[dict[str, str]]] = {}
-    for row in upload_rows:
-        key = (row.get("file", "").strip(), row.get("tag", "").strip())
-        grouped.setdefault(key, []).append(row)
 
-    out: list[dict[str, str]] = []
-    for (file_name, tag), rows in grouped.items():
-        if not tag:
+def is_toc_like_line(line: str) -> bool:
+    txt = (line or "").strip()
+    if not txt:
+        return False
+    if re.search(r"\.{4,}", txt):
+        return True
+    if re.search(r"\.{2,}\s*\d{1,3}\s*$", txt):
+        return True
+    return False
+
+
+def extract_target_sections(text: str) -> dict[str, dict[str, str]]:
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    headings: list[tuple[int, str, str]] = []
+    for idx, line in enumerate(lines):
+        m = HEADING_LINE_RE.match(line)
+        if not m:
             continue
-        category = tag_to_category.get(tag, "evidence")
-        terms = sorted({(r.get("term") or "").strip() for r in rows if (r.get("term") or "").strip()})
-        source_pages = sorted({(r.get("source_page") or "").strip() for r in rows if (r.get("source_page") or "").strip()})
-        snippets = [r.get("snippet", "").strip() for r in rows if (r.get("snippet") or "").strip()]
-        hint_text = "; ".join(terms[:4]) if terms else tag
-        snippet = snippets[0] if snippets else ""
-        req_id = f"REQ-AUTO-{re.sub(r'[^A-Za-z0-9]+', '-', tag).strip('-').upper()}-{len(rows):03d}"
+        sec = m.group(1)
+        rest = m.group(2).strip()
+        headings.append((idx, sec, rest))
+
+    by_sec: dict[str, list[int]] = {}
+    for idx, sec, _ in headings:
+        if sec in TARGET_SECTIONS:
+            by_sec.setdefault(sec, []).append(idx)
+
+    chosen_idx_by_sec: dict[str, int] = {}
+    for sec in TARGET_SECTIONS:
+        candidates = by_sec.get(sec, [])
+        if not candidates:
+            continue
+        chosen: int | None = None
+        for idx in candidates:
+            line = lines[idx]
+            if is_toc_like_line(line):
+                continue
+            window = " ".join(lines[idx : min(len(lines), idx + 4)]).lower()
+            if is_toc_like_line(window):
+                continue
+            chosen = idx
+            break
+        if chosen is None:
+            chosen = candidates[0]
+        chosen_idx_by_sec[sec] = chosen
+
+    sorted_targets = sorted(((idx, sec) for sec, idx in chosen_idx_by_sec.items()), key=lambda x: x[0])
+    out: dict[str, dict[str, str]] = {}
+    for i, (idx, sec) in enumerate(sorted_targets):
+        next_idx = len(lines)
+        if i + 1 < len(sorted_targets):
+            next_idx = sorted_targets[i + 1][0]
+        block = lines[idx:next_idx]
+        if not block:
+            continue
+        heading = block[0]
+        body = "\n".join(block)
+        out[sec] = {"heading": heading, "text": body[:6000]}
+    return out
+
+
+def extract_bullet_documents(section_text: str) -> list[str]:
+    lines = [ln.strip() for ln in section_text.splitlines() if ln.strip()]
+    marker_re = re.compile(r"^(?:[-\u2022\u25aa\u25cf\u2023\uf0ad\u25cf\uf0b7\uf0ad]|)\s*(.+)$")
+    bullets: list[str] = []
+    current = ""
+    for line in lines:
+        m = marker_re.match(line)
+        if m:
+            if current:
+                bullets.append(normalize_text(current))
+            current = m.group(1).strip()
+            continue
+        if current:
+            current = f"{current} {line}"
+    if current:
+        bullets.append(normalize_text(current))
+
+    cleaned: list[str] = []
+    for b in bullets:
+        low = b.lower()
+        if any(k in low for k in ("\u043f\u043e\u0442\u0432\u0440\u0434\u0430", "\u0438\u0437\u0458\u0430\u0432\u0430", "\u0434\u043e\u043a\u0443\u043c\u0435\u043d\u0442")):
+            cleaned.append(b[:500])
+    return cleaned
+
+
+def build_requirements_template_rows(
+    source_file: str,
+    upload_rows: list[dict[str, str]],
+    sections: dict[str, dict[str, str]],
+    tech_spec_hits: list[dict[str, Any]],
+) -> list[dict[str, str]]:
+    out: list[dict[str, str]] = []
+
+    for sec, payload in sections.items():
         out.append(
             {
-                "requirement_id": req_id,
-                "source_file": file_name,
-                "category": category,
-                "hint_tag": tag,
-                "requirement_text": f"Provide evidence for '{hint_text}' derived from tender context.",
-                "evidence_expected": tag,
+                "requirement_id": f"REQ-SEC-{sec.replace('.', '-')}",
+                "source_file": source_file,
+                "category": "section_extract",
+                "hint_tag": "section_extract",
+                "section_code": sec,
+                "section_heading": payload["heading"][:240],
+                "requirement_text": payload["text"][:2400],
+                "evidence_expected": "review_section_content",
                 "mandatory": "yes",
-                "source_pages": ",".join(source_pages),
-                "snippet": snippet[:280],
+                "source_pages": "",
+                "snippet": payload["text"][:280],
+                "status": "draft_from_target_section",
+            }
+        )
+
+    if "4.2.4" in sections:
+        docs = extract_bullet_documents(sections["4.2.4"]["text"])
+        for i, doc_line in enumerate(docs, start=1):
+            out.append(
+                {
+                    "requirement_id": f"REQ-EXCL-DOC-{i:03d}",
+                    "source_file": source_file,
+                    "category": "exclusion_evidence",
+                    "hint_tag": "proof_document",
+                    "section_code": "4.2.4",
+                    "section_heading": sections["4.2.4"]["heading"][:240],
+                    "requirement_text": doc_line,
+                    "evidence_expected": "explicit_supporting_document",
+                    "mandatory": "yes",
+                    "source_pages": "",
+                    "snippet": doc_line[:280],
+                    "status": "draft_from_target_section",
+                }
+            )
+
+    for i, hit in enumerate(tech_spec_hits, start=1):
+        out.append(
+            {
+                "requirement_id": f"REQ-TECHSPEC-HIDDEN-{i:03d}",
+                "source_file": source_file,
+                "category": "technical_spec_hidden_conditions",
+                "hint_tag": "hidden_uslovi",
+                "section_code": "tech_spec",
+                "section_heading": "\u0422\u0435\u0445\u043d\u0438\u0447\u043a\u0430 \u0441\u043f\u0435\u0446\u0438\u0444\u0438\u043a\u0430\u0446\u0438\u0458\u0430 - \u0441\u043a\u0440\u0438\u0435\u043d\u0438 \u0443\u0441\u043b\u043e\u0432\u0438",
+                "requirement_text": hit.get("snippet", "")[:2400],
+                "evidence_expected": "review_technical_specification",
+                "mandatory": "yes",
+                "source_pages": str(hit.get("page") or ""),
+                "snippet": hit.get("snippet", "")[:280],
+                "status": "draft_from_technical_spec",
+            }
+        )
+
+    for row in upload_rows:
+        out.append(
+            {
+                "requirement_id": f"REQ-HINT-{re.sub(r'[^A-Za-z0-9]+', '-', row['tag']).strip('-').upper()}",
+                "source_file": source_file,
+                "category": "upload_hint",
+                "hint_tag": row["tag"],
+                "section_code": "",
+                "section_heading": "",
+                "requirement_text": f"Detected upload hint term '{row['term']}' in tender context.",
+                "evidence_expected": row["tag"],
+                "mandatory": "yes",
+                "source_pages": row["source_page"],
+                "snippet": row["snippet"][:280],
                 "status": "draft_from_upload_hints",
             }
         )
 
-    out.sort(key=lambda x: (x["source_file"], x["category"], x["hint_tag"]))
     return out
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Extract tender context and likely 'Услови' obligations.")
-    parser.add_argument("--input-dir", default="downloads", help="Directory with downloaded tender docs.")
-    parser.add_argument(
-        "--out-dir",
-        default="task_force/out/tender_context",
-        help="Output folder for structured context pack.",
+def write_upload_hints_xlsx(rows: list[dict[str, str]], path: Path) -> None:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "upload_hints"
+    ws.append(["file", "tag", "term", "source_page", "snippet"])
+    for row in rows:
+        ws.append([row["file"], row["tag"], row["term"], row["source_page"], row["snippet"]])
+    wb.save(path)
+
+
+def write_rows_xlsx(rows: list[dict[str, str]], path: Path, sheet_name: str) -> None:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = sheet_name[:31]
+    headers = list(rows[0].keys()) if rows else []
+    ws.append(headers)
+    for row in rows:
+        ws.append([row.get(h, "") for h in headers])
+    wb.save(path)
+
+
+def write_simple_checklist_docx(lines: list[str], path: Path) -> None:
+    def paragraph_xml(text: str) -> str:
+        clean = escape(text).replace("\n", " ")
+        return (
+            "<w:p><w:r><w:rPr><w:sz w:val=\"22\"/></w:rPr>"
+            f"<w:t xml:space=\"preserve\">{clean}</w:t>"
+            "</w:r></w:p>"
+        )
+
+    plain_lines: list[str] = []
+    for raw in lines:
+        line = raw.strip()
+        if not line:
+            plain_lines.append("")
+            continue
+        if line.startswith("# "):
+            plain_lines.append(line[2:].strip())
+            continue
+        if line.startswith("## "):
+            plain_lines.append(line[3:].strip())
+            continue
+        if line.startswith("- [ ] "):
+            plain_lines.append("☐ " + line[6:].strip())
+            continue
+        if line.startswith("- "):
+            plain_lines.append("• " + line[2:].strip())
+            continue
+        plain_lines.append(line)
+
+    body = "".join(paragraph_xml(x if x else " ") for x in plain_lines)
+    document_xml = (
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>"
+        "<w:document xmlns:wpc=\"http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas\" "
+        "xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" "
+        "xmlns:o=\"urn:schemas-microsoft-com:office:office\" "
+        "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" "
+        "xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\" "
+        "xmlns:v=\"urn:schemas-microsoft-com:vml\" "
+        "xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing\" "
+        "xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing\" "
+        "xmlns:w10=\"urn:schemas-microsoft-com:office:word\" "
+        "xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" "
+        "xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" "
+        "xmlns:wpg=\"http://schemas.microsoft.com/office/word/2010/wordprocessingGroup\" "
+        "xmlns:wpi=\"http://schemas.microsoft.com/office/word/2010/wordprocessingInk\" "
+        "xmlns:wne=\"http://schemas.microsoft.com/office/word/2006/wordml\" "
+        "xmlns:wps=\"http://schemas.microsoft.com/office/word/2010/wordprocessingShape\" "
+        "mc:Ignorable=\"w14 wp14\">"
+        f"<w:body>{body}<w:sectPr><w:pgSz w:w=\"11906\" w:h=\"16838\"/><w:pgMar w:top=\"1440\" w:right=\"1440\" "
+        "w:bottom=\"1440\" w:left=\"1440\" w:header=\"708\" w:footer=\"708\" w:gutter=\"0\"/>"
+        "<w:cols w:space=\"708\"/><w:docGrid w:linePitch=\"360\"/></w:sectPr></w:body></w:document>"
     )
-    parser.add_argument("--max-files", type=int, default=8, help="Max files to process.")
+    content_types_xml = (
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>"
+        "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">"
+        "<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>"
+        "<Default Extension=\"xml\" ContentType=\"application/xml\"/>"
+        "<Override PartName=\"/word/document.xml\" "
+        "ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/>"
+        "</Types>"
+    )
+    root_rels_xml = (
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>"
+        "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+        "<Relationship Id=\"rId1\" "
+        "Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" "
+        "Target=\"word/document.xml\"/>"
+        "</Relationships>"
+    )
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("[Content_Types].xml", content_types_xml)
+        zf.writestr("_rels/.rels", root_rels_xml)
+        zf.writestr("word/document.xml", document_xml)
+
+
+def build_simple_checklist_lines(
+    tender_id: str,
+    main_source_file: str,
+    sections: dict[str, dict[str, str]],
+    req_rows: list[dict[str, str]],
+) -> list[str]:
+    lines = [
+        f"# Upload Checklist - {tender_id}",
+        "",
+        f"Source tender file: `{main_source_file}`",
+        "",
+        "## Key Tender Sections (\u0443\u0441\u043b\u043e\u0432\u0438)",
+    ]
+    for sec in sorted(sections.keys(), key=lambda s: [int(x) for x in s.split(".")]):
+        heading = sections[sec]["heading"].strip()
+        lines.append(f"- [ ] {sec} - {heading}")
+
+    lines.extend(["", "## Required Evidence Documents"])
+    evidence_rows = [r for r in req_rows if r.get("category") in {"exclusion_evidence"}]
+    if evidence_rows:
+        for row in evidence_rows:
+            lines.append(f"- [ ] {row['requirement_text']}")
+    else:
+        lines.append("- [ ] No explicit exclusion evidence bullets extracted. Review section 4.2.4 manually.")
+
+    lines.extend(["", "## Hidden Conditions (Technical Specification)"])
+    hidden_rows = [r for r in req_rows if r.get("category") == "technical_spec_hidden_conditions"]
+    if hidden_rows:
+        for row in hidden_rows:
+            src_page = row.get("source_pages", "").strip()
+            page_note = f" (page {src_page})" if src_page else ""
+            lines.append(f"- [ ] {row['snippet']}{page_note}")
+    else:
+        lines.append("- [ ] No hidden technical-spec conditions detected in this run.")
+
+    lines.extend(
+        [
+            "",
+            "## Final Control",
+            "- [ ] All mandatory documents attached.",
+            "- [ ] Conditional documents evaluated and attached where applicable.",
+            "- [ ] Deadline and e-auction rules validated against tender sections.",
+        ]
+    )
+    return lines
+
+
+def build_simple_form_rows(req_rows: list[dict[str, str]]) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    relevant = [
+        r
+        for r in req_rows
+        if r.get("category")
+        in {"section_extract", "exclusion_evidence", "technical_spec_hidden_conditions"}
+    ]
+    for idx, row in enumerate(relevant, start=1):
+        if row.get("category") == "section_extract":
+            item_text = row.get("section_heading", "").strip()
+        elif row.get("category") == "technical_spec_hidden_conditions":
+            item_text = row.get("snippet", "").strip()
+        else:
+            item_text = row.get("requirement_text", "").strip()
+        item_text = re.sub(r"\s+", " ", item_text)[:260]
+        rows.append(
+            {
+                "item_no": str(idx),
+                "section_code": row.get("section_code", ""),
+                "requirement_id": row.get("requirement_id", ""),
+                "checklist_item": item_text,
+                "mandatory": row.get("mandatory", "yes"),
+                "provided": "",
+                "attached_file_name": "",
+                "reviewer_comment": "",
+            }
+        )
+    return rows
+
+
+def write_simple_form_docx(rows: list[dict[str, str]], tender_id: str, path: Path) -> None:
+    lines = [f"Upload Form - {tender_id}", ""]
+    for row in rows:
+        lines.append(
+            f"☐ [{row.get('item_no','')}] {row.get('section_code','')} {row.get('requirement_id','')} - {row.get('checklist_item','')}"
+        )
+        lines.append("    Provided: ________")
+        lines.append("    Attached file: ________")
+        lines.append("    Reviewer comment: ________")
+        lines.append("")
+    write_simple_checklist_docx(lines, path)
+
+
+def compact_text(value: str, max_len: int = 520) -> str:
+    txt = re.sub(r"\s+", " ", (value or "").strip())
+    txt = re.sub(r"^\d+(?:\.\d+){0,3}\.?\s*", "", txt)
+    if len(txt) <= max_len:
+        return txt
+    return txt[: max_len - 3].rstrip() + "..."
+
+
+def pick_section_text(sections: dict[str, dict[str, str]], keys: list[str]) -> str:
+    for key in keys:
+        payload = sections.get(key)
+        if payload and payload.get("text"):
+            return payload["text"]
+    return ""
+
+
+def detect_institution_name(full_text: str) -> str:
+    normalized = normalize_text(full_text)
+    head = normalized[:8000]
+    patterns = [
+        r"(?:\u0434\u043e\u0433\u043e\u0432\u043e\u0440\u043d(?:\u0438\u043e\u0442)?\s+\u043e\u0440\u0433\u0430\u043d)\s*[:\-]\s*([^\n]{4,220})",
+        r"(?:\u043d\u0430\u0437\u0438\u0432\s+\u043d\u0430\s+\u0434\u043e\u0433\u043e\u0432\u043e\u0440(?:\u043d\u0438\u043e\u0442)?\s+\u043e\u0440\u0433\u0430\u043d)\s*[:\-]\s*([^\n]{4,220})",
+    ]
+    for pat in patterns:
+        m = re.search(pat, head, flags=re.IGNORECASE)
+        if not m:
+            continue
+        candidate = compact_text(m.group(1), 180)
+        low = candidate.lower()
+        if (
+            "\u0447\u0438\u0458 \u043f\u0440\u0435\u0434\u043c\u0435\u0442" in low
+            or "\u0435\u043a\u043e\u043d\u043e\u043c\u0441\u043a\u0438 \u043e\u043f\u0435\u0440\u0430\u0442\u043e\u0440" in low
+            or "\u045c\u0435 " in low
+            or " \u0441\u0435 " in low
+            or "\u0437\u0430 \u0434\u0430\u043d\u043e\u0446\u0438\u0442\u0435" in low
+            or "\u043c\u0438\u043d\u0438\u0441\u0442\u0435\u0440\u0441\u0442\u0432\u043e\u0442\u043e \u0437\u0430 \u0444\u0438\u043d\u0430\u043d\u0441\u0438\u0438" in low
+            or len(candidate.split()) < 2
+        ):
+            continue
+        return candidate
+
+    m = re.search(
+        r"\u0442\u0435\u043d\u0434\u0435\u0440\u0441\u043a\u0430\s+\u0434\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u0430\u0446\u0438\u0458\u0430.{0,180}?\u0437\u0430\s+(.{6,180}?)\s+\u0441\u043e\s+\u0431\u0440\u043e\u0458\s+\u043d\u0430\s+\u043e\u0433\u043b\u0430\u0441",
+        head,
+        flags=re.IGNORECASE,
+    )
+    if m:
+        return compact_text(m.group(1), 180)
+
+    m = re.search(
+        r"\u0443\u0441\u043b\u0443\u0433\u0438\s+\u043e\u0434\s+\u0438\u043d\u0442\u0435\u0440\u043d\u0435\u0442\s+\u0437\u0430\s+([^,\\n]{3,120})",
+        normalized,
+        re.IGNORECASE,
+    )
+    if m:
+        candidate = re.split(
+            r"\s+\u0441\u043e\s+\u0431\u0440\u043e\u0458\s+\u043d\u0430\s+\u043e\u0433\u043b\u0430\u0441",
+            m.group(1),
+            maxsplit=1,
+            flags=re.IGNORECASE,
+        )[0]
+        return compact_text(candidate, 180)
+
+    m = re.search(
+        r"\b(\u043c\u0438\u043d\u0438\u0441\u0442\u0435\u0440\u0441\u0442\u0432\u043e[^\n]{3,140}|\u043e\u043f\u0448\u0442\u0438\u043d\u0430[^\n]{3,140}|\u0441\u0443\u0434[^\n]{3,140})",
+        normalized,
+        re.IGNORECASE,
+    )
+    if m:
+        return compact_text(m.group(1), 180)
+    return "\u041d\u0435 \u0435 \u0430\u0432\u0442\u043e\u043c\u0430\u0442\u0441\u043a\u0438 \u0434\u0435\u0442\u0435\u043a\u0442\u0438\u0440\u0430\u043d\u043e (\u043f\u0440\u043e\u0432\u0435\u0440\u0438 \u0442\u0435\u043d\u0434\u0435\u0440\u0441\u043a\u0430 \u0434\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u0430\u0446\u0438\u0458\u0430)."
+
+
+def detect_procedure_type(section_15_text: str) -> str:
+    low = section_15_text.lower()
+    if "поедноставена отворена постапка" in low:
+        return "Поедноставена отворена постапка"
+    if "отворена постапка" in low:
+        return "Отворена постапка"
+    if "постапка од мала вредност" in low:
+        return "Набавка од мала вредност"
+    return compact_text(section_15_text, 180) or "Провери дел 1.5."
+
+
+def detect_procedure_type_from_full_text(full_text: str, section_15_text: str) -> str:
+    merged = f"{full_text[:12000]} {section_15_text}".lower()
+    if "поедноставена отворена постапка" in merged:
+        return "Поедноставена отворена постапка"
+    if "отворена постапка" in merged:
+        return "Отворена постапка"
+    if "набавка од мала вредност" in merged:
+        return "Набавка од мала вредност"
+    if "конкурентна постапка" in merged:
+        return "Конкурентна постапка"
+    return detect_procedure_type(section_15_text)
+
+
+def pick_section_text_with_keywords(
+    sections: dict[str, dict[str, str]],
+    keys: list[str],
+    keywords: list[str],
+) -> str:
+    for key in keys:
+        payload = sections.get(key)
+        if not payload:
+            continue
+        txt = payload.get("text", "")
+        low = txt.lower()
+        if any(kw in low for kw in keywords):
+            return txt
+    return pick_section_text(sections, keys)
+
+
+def build_elegant_context_lines(
+    tender_id: str,
+    main_source_file: str,
+    full_text: str,
+    sections: dict[str, dict[str, str]],
+    tech_spec_hits: list[dict[str, Any]],
+) -> list[str]:
+    sec_13 = pick_section_text_with_keywords(sections, ["1.3"], ["предмет", "набавка"])
+    sec_15 = pick_section_text_with_keywords(sections, ["1.5"], ["постапка", "отворена"])
+    sec_161 = pick_section_text_with_keywords(sections, ["1.6.1"], ["аукција", "електронска"])
+    sec_34 = pick_section_text_with_keywords(sections, ["3.4"], ["цена", "понуда"])
+    sec_310 = pick_section_text_with_keywords(
+        sections, ["3.10", "4.3"], ["содржина на понудата", "елементи", "финансиска понуда"]
+    )
+    sec_51 = pick_section_text_with_keywords(
+        sections, ["5.1", "4.1"], ["критериуми", "утврдување способност", "способност"]
+    )
+    sec_42 = pick_section_text_with_keywords(
+        sections, ["4.2", "5.2"], ["причини за исклучување", "исклучување"]
+    )
+    sec_43 = pick_section_text_with_keywords(
+        sections, ["4.3", "5.3"], ["квалитативен избор", "услови"]
+    )
+    sec_432 = pick_section_text_with_keywords(
+        sections, ["4.3.2", "5.3.2"], ["техничка", "професионална способност"]
+    )
+    sec_44 = pick_section_text_with_keywords(
+        sections, ["4.4", "5.4"], ["стандарди", "квалитет", "iso"]
+    )
+    sec_best = pick_section_text_with_keywords(
+        sections, ["5.4", "5"], ["критериум за избор", "најповолна понуда", "критериум"]
+    )
+
+    auction_note = compact_text(sec_161, 260) if sec_161 else "Нема експлицитно пронајден дел 1.6.1."
+    quality_note = compact_text(sec_44, 260) if sec_44 else "Нема експлицитно пронајдени стандарди."
+
+    lines = [
+        f"# Контекст за upload - {tender_id}",
+        "",
+        f"Извор: `{main_source_file}`",
+        "",
+        f"**Име на институција:** {detect_institution_name(full_text)}",
+        f"**Тип на постапка:** {detect_procedure_type_from_full_text(full_text, sec_15)}",
+        f"**Предмет на набавка:** {compact_text(sec_13, 260) or 'Провери дел 1.3.'}",
+        f"**Посебни начини за доделување на договорот за јавна набавка:** {auction_note}",
+        f"**Цена на понудата:** {compact_text(sec_34, 260) or 'Провери дел 3.4.'}",
+        f"**Елементи на понудата:** {compact_text(sec_310, 260) or 'Провери дел 3.10 / 4.3.'}",
+        f"**Критериуми за утврдување на способност на понудувачите:** {compact_text(sec_51, 260) or 'Провери дел 5.1 / 4.1.'}",
+        f"**Причини за исклучување од постапката:** {compact_text(sec_42, 260) or 'Провери дел 4.2 / 5.2.'}",
+        f"**Услови за квалитативен избор:** {compact_text(sec_43, 260) or 'Провери дел 4.3 / 5.3.'}",
+        f"**Техничка и професионална способност:** {compact_text(sec_432, 260) or 'Провери дел 4.3.2 / 5.3.2.'}",
+        f"**Стандарди за системи за квалитет:** {quality_note}",
+        f"**КРИТЕРИУМ ЗА ИЗБОР НА НАЈПОВОЛНА ПОНУДА:** {compact_text(sec_best, 220) or 'Провери дел за критериум.'}",
+        "",
+        "## Дополнително од Техничка спецификација",
+    ]
+    if tech_spec_hits:
+        for i, hit in enumerate(tech_spec_hits[:10], start=1):
+            page = str(hit.get("page") or "").strip()
+            suffix = f" (стр. {page})" if page else ""
+            lines.append(f"- {i}. {compact_text(hit.get('snippet', ''), 220)}{suffix}")
+    else:
+        lines.append("- Нема детектирани дополнителни услови во техничката спецификација во оваа обработка.")
+    return lines
+
+
+def first_sentence(text: str, max_len: int = 220) -> str:
+    txt = compact_text(text, max_len * 2)
+    if not txt:
+        return ""
+    sentence = re.split(r"(?<=[\.\!\?])\s+", txt, maxsplit=1)[0].strip()
+    sentence = re.sub(r"\s+", " ", sentence)
+    return compact_text(sentence or txt, max_len)
+
+
+def normalize_for_similarity(text: str) -> str:
+    normalized = re.sub(r"[^a-zA-Z0-9\u0400-\u04FF]+", " ", (text or "").lower())
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
+def pick_section_value(
+    sections: dict[str, dict[str, str]],
+    preferred_keys: list[str],
+    keywords: list[str],
+    fallback_note: str,
+    max_len: int = 220,
+) -> dict[str, str]:
+    for key in preferred_keys:
+        payload = sections.get(key)
+        if not payload:
+            continue
+        txt = payload.get("text", "")
+        low = txt.lower()
+        if keywords and any(kw in low for kw in keywords):
+            return {
+                "value": first_sentence(txt, max_len) or fallback_note,
+                "confidence": "high",
+                "source_section": key,
+                "mapping": "semantic+section",
+            }
+
+    for key in preferred_keys:
+        payload = sections.get(key)
+        if payload and payload.get("text"):
+            return {
+                "value": first_sentence(payload["text"], max_len) or fallback_note,
+                "confidence": "medium",
+                "source_section": key,
+                "mapping": "section_only",
+            }
+
+    for sec_code, payload in sections.items():
+        txt = payload.get("text", "")
+        low = txt.lower()
+        if keywords and any(kw in low for kw in keywords):
+            return {
+                "value": first_sentence(txt, max_len) or fallback_note,
+                "confidence": "low",
+                "source_section": sec_code,
+                "mapping": "semantic_fallback",
+            }
+
+    return {
+        "value": f"{MANUAL_REVIEW_FLAG} - {fallback_note}",
+        "confidence": "low",
+        "source_section": "",
+        "mapping": "missing",
+    }
+
+
+def detect_institution_field(full_text: str) -> dict[str, str]:
+    normalized = normalize_text(full_text)
+    head = normalized[:8000]
+    strong_patterns = [
+        r"(?:\u0434\u043e\u0433\u043e\u0432\u043e\u0440\u043d(?:\u0438\u043e\u0442)?\s+\u043e\u0440\u0433\u0430\u043d)\s*[:\-]\s*([^\n]{4,220})",
+        r"(?:\u043d\u0430\u0437\u0438\u0432\s+\u043d\u0430\s+\u0434\u043e\u0433\u043e\u0432\u043e\u0440(?:\u043d\u0438\u043e\u0442)?\s+\u043e\u0440\u0433\u0430\u043d)\s*[:\-]\s*([^\n]{4,220})",
+    ]
+    for pat in strong_patterns:
+        m = re.search(pat, head, flags=re.IGNORECASE)
+        if not m:
+            continue
+        candidate = compact_text(m.group(1), 180)
+        low = candidate.lower()
+        if (
+            "\u0447\u0438\u0458 \u043f\u0440\u0435\u0434\u043c\u0435\u0442" in low
+            or "\u0435\u043a\u043e\u043d\u043e\u043c\u0441\u043a\u0438 \u043e\u043f\u0435\u0440\u0430\u0442\u043e\u0440" in low
+            or "\u045c\u0435 " in low
+            or " \u0441\u0435 " in low
+            or len(candidate.split()) < 2
+            or any(bad in low for bad in INSTITUTION_BLOCKLIST)
+        ):
+            continue
+        return {"value": candidate, "confidence": "high", "source_section": "header", "mapping": "explicit_label"}
+
+    moderate_patterns = [
+        r"\u0442\u0435\u043d\u0434\u0435\u0440\u0441\u043a\u0430\s+\u0434\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u0430\u0446\u0438\u0458\u0430.{0,180}?\u0437\u0430\s+(.{6,180}?)\s+\u0441\u043e\s+\u0431\u0440\u043e\u0458\s+\u043d\u0430\s+\u043e\u0433\u043b\u0430\u0441",
+        r"\b(\u043e\u043f\u0448\u0442\u0438\u043d\u0430[^\n]{3,120}|\u0458\u0430\u0432\u043d\u043e \u043f\u0440\u0435\u0442\u043f\u0440\u0438\u0458\u0430\u0442\u0438\u0435[^\n]{3,120}|\u0443\u043d\u0438\u0432\u0435\u0440\u0437\u0438\u0442\u0435\u0442[^\n]{3,120}|\u043a\u043b\u0438\u043d\u0438\u043a[^\n]{3,120}|\u043c\u0438\u043d\u0438\u0441\u0442\u0435\u0440\u0441\u0442\u0432\u043e[^\n]{3,120})",
+    ]
+    for pat in moderate_patterns:
+        m = re.search(pat, head, flags=re.IGNORECASE)
+        if not m:
+            continue
+        candidate = compact_text(m.group(1), 180)
+        low = candidate.lower()
+        if len(candidate.split()) < 2 or any(bad in low for bad in INSTITUTION_BLOCKLIST):
+            continue
+        return {"value": candidate, "confidence": "medium", "source_section": "header", "mapping": "pattern_fallback"}
+
+    return {
+        "value": f"{MANUAL_REVIEW_FLAG} - \u0438\u043d\u0441\u0442\u0438\u0442\u0443\u0446\u0438\u0458\u0430 \u043d\u0435 \u0435 \u0458\u0430\u0441\u043d\u043e \u0434\u0435\u0444\u0438\u043d\u0438\u0440\u0430\u043d\u0430.",
+        "confidence": "low",
+        "source_section": "",
+        "mapping": "missing",
+    }
+
+
+def score_tech_spec_hit(hit: dict[str, Any]) -> int:
+    snippet = str(hit.get("snippet", ""))
+    low = snippet.lower()
+    score = 0
+    for kw in ("мора", "задолж", "исклуч", "доказ", "сертификат", "рок", "гаран"):
+        if kw in low:
+            score += 2
+    score += min(3, max(0, len(snippet) // 120))
+    if hit.get("page"):
+        score += 1
+    return score
+
+
+def dedupe_top_tech_spec_hits(
+    tech_spec_hits: list[dict[str, Any]], max_items: int = MAX_HIDDEN_TECH_SPEC_ITEMS
+) -> list[dict[str, Any]]:
+    ranked = sorted(tech_spec_hits, key=score_tech_spec_hit, reverse=True)
+    kept: list[dict[str, Any]] = []
+    fingerprints: list[str] = []
+    for hit in ranked:
+        fp = normalize_for_similarity(str(hit.get("snippet", "")))
+        if len(fp) < 24:
+            continue
+        is_duplicate = False
+        for seen in fingerprints:
+            if fp == seen or SequenceMatcher(None, fp, seen).ratio() >= 0.88:
+                is_duplicate = True
+                break
+        if is_duplicate:
+            continue
+        kept.append(hit)
+        fingerprints.append(fp)
+        if len(kept) >= max_items:
+            break
+    return kept
+
+
+def build_context_fields(
+    full_text: str,
+    sections: dict[str, dict[str, str]],
+    tech_spec_hits: list[dict[str, Any]],
+) -> dict[str, dict[str, str]]:
+    procedure_field = pick_section_value(
+        sections,
+        ["1.5"],
+        ["постапка", "отворена"],
+        "\u043f\u0440\u043e\u0446\u0435\u0434\u0443\u0440\u0430 (\u0434\u0435\u043b 1.5)",
+        180,
+    )
+
+    fields: dict[str, dict[str, str]] = {
+        "institution_name": detect_institution_field(full_text),
+        "procedure_type": {
+            "value": first_sentence(detect_procedure_type_from_full_text(full_text, procedure_field["value"]), 180),
+            "confidence": "high" if procedure_field["confidence"] != "low" else "medium",
+            "source_section": procedure_field.get("source_section", ""),
+            "mapping": "derived_from_procedure",
+        },
+        "subject_of_procurement": pick_section_value(
+            sections, ["1.3"], ["предмет", "набавка"], "\u043f\u0440\u0435\u0434\u043c\u0435\u0442 \u043d\u0430 \u043d\u0430\u0431\u0430\u0432\u043a\u0430 (\u0434\u0435\u043b 1.3)"
+        ),
+        "award_method_notes": pick_section_value(
+            sections, ["1.6.1", "1.6.1.1"], ["аукција", "електронска", "доделување"], "\u0434\u043e\u0434\u0435\u043b\u0443\u0432\u0430\u045a\u0435 \u043d\u0430 \u0434\u043e\u0433\u043e\u0432\u043e\u0440 (\u0434\u0435\u043b 1.6.1)"
+        ),
+        "offer_price_notes": pick_section_value(
+            sections, ["3.4"], ["цена", "понуда"], "\u0446\u0435\u043d\u0430 \u043d\u0430 \u043f\u043e\u043d\u0443\u0434\u0430 (\u0434\u0435\u043b 3.4)"
+        ),
+        "offer_elements": pick_section_value(
+            sections, ["3.10", "4.3"], ["содржина на понудата", "елементи", "финансиска понуда"], "\u0435\u043b\u0435\u043c\u0435\u043d\u0442\u0438 \u043d\u0430 \u043f\u043e\u043d\u0443\u0434\u0430\u0442\u0430 (\u0434\u0435\u043b 3.10/4.3)"
+        ),
+        "bidder_eligibility_criteria": pick_section_value(
+            sections, ["5.1", "4.1"], ["критериуми", "утврдување способност", "способност"], "\u0441\u043f\u043e\u0441\u043e\u0431\u043d\u043e\u0441\u0442 \u043d\u0430 \u043f\u043e\u043d\u0443\u0434\u0443\u0432\u0430\u0447 (\u0434\u0435\u043b 5.1/4.1)"
+        ),
+        "exclusion_grounds": pick_section_value(
+            sections, ["4.2", "5.2"], ["причини за исклучување", "исклучување"], "\u043f\u0440\u0438\u0447\u0438\u043d\u0438 \u0437\u0430 \u0438\u0441\u043a\u043b\u0443\u0447\u0443\u0432\u0430\u045a\u0435 (\u0434\u0435\u043b 4.2/5.2)"
+        ),
+        "qualitative_selection_conditions": pick_section_value(
+            sections, ["4.3", "5.3"], ["квалитативен избор", "услови"], "\u043a\u0432\u0430\u043b\u0438\u0442\u0430\u0442\u0438\u0432\u0435\u043d \u0438\u0437\u0431\u043e\u0440 (\u0434\u0435\u043b 4.3/5.3)"
+        ),
+        "technical_professional_ability": pick_section_value(
+            sections, ["4.3.2", "5.3.2"], ["техничка", "професионална способност"], "\u0442\u0435\u0445\u043d\u0438\u0447\u043a\u0430/\u043f\u0440\u043e\u0444\u0435\u0441\u0438\u043e\u043d\u0430\u043b\u043d\u0430 \u0441\u043f\u043e\u0441\u043e\u0431\u043d\u043e\u0441\u0442 (\u0434\u0435\u043b 4.3.2/5.3.2)"
+        ),
+        "quality_standards": pick_section_value(
+            sections, ["4.4", "5.4"], ["стандарди", "квалитет", "iso"], "\u0441\u0442\u0430\u043d\u0434\u0430\u0440\u0434\u0438 \u043a\u0432\u0430\u043b\u0438\u0442\u0435\u0442 (\u0434\u0435\u043b 4.4/5.4)"
+        ),
+        "best_offer_criterion": pick_section_value(
+            sections, ["5.4", "5"], ["критериум за избор", "најповолна понуда", "критериум"], "\u043a\u0440\u0438\u0442\u0435\u0440\u0438\u0443\u043c \u0437\u0430 \u043d\u0430\u0458\u043f\u043e\u0432\u043e\u043b\u043d\u0430 \u043f\u043e\u043d\u0443\u0434\u0430"
+        ),
+    }
+
+    for field in fields.values():
+        if field.get("confidence") == "low" and MANUAL_REVIEW_FLAG not in field.get("value", ""):
+            field["value"] = f"{MANUAL_REVIEW_FLAG} - {field['value']}"
+
+    fields["hidden_technical_conditions"] = {
+        "value": str(len(tech_spec_hits)),
+        "confidence": "high" if tech_spec_hits else "low",
+        "source_section": "tech_spec",
+        "mapping": "deduped_top_hits",
+    }
+    return fields
+
+
+def build_elegant_context_lines_v2(
+    tender_id: str,
+    main_source_file: str,
+    context_fields: dict[str, dict[str, str]],
+    tech_spec_hits: list[dict[str, Any]],
+) -> list[str]:
+    def fmt_field(key: str) -> str:
+        data = context_fields.get(key, {})
+        value = data.get("value", f"{MANUAL_REVIEW_FLAG}.")
+        conf = data.get("confidence", "low")
+        src = data.get("source_section", "")
+        src_note = f", source={src}" if src else ""
+        return f"{value} [{conf}{src_note}]"
+
+    lines = [
+        f"# Context for upload - {tender_id}",
+        "",
+        f"Source: `{main_source_file}`",
+        "",
+        f"**Institution name:** {fmt_field('institution_name')}",
+        f"**Procedure type:** {fmt_field('procedure_type')}",
+        f"**Subject of procurement:** {fmt_field('subject_of_procurement')}",
+        f"**Award method notes:** {fmt_field('award_method_notes')}",
+        f"**Offer price notes:** {fmt_field('offer_price_notes')}",
+        f"**Offer elements:** {fmt_field('offer_elements')}",
+        f"**Bidder eligibility criteria:** {fmt_field('bidder_eligibility_criteria')}",
+        f"**Exclusion grounds:** {fmt_field('exclusion_grounds')}",
+        f"**Qualitative selection conditions:** {fmt_field('qualitative_selection_conditions')}",
+        f"**Technical/professional ability:** {fmt_field('technical_professional_ability')}",
+        f"**Quality standards:** {fmt_field('quality_standards')}",
+        f"**Best offer criterion:** {fmt_field('best_offer_criterion')}",
+        "",
+        f"## Additional hidden conditions (top {MAX_HIDDEN_TECH_SPEC_ITEMS})",
+    ]
+    if tech_spec_hits:
+        for i, hit in enumerate(tech_spec_hits[:MAX_HIDDEN_TECH_SPEC_ITEMS], start=1):
+            page = str(hit.get("page") or "").strip()
+            suffix = f" (page {page})" if page else ""
+            lines.append(f"- {i}. {first_sentence(str(hit.get('snippet', '')), 220)}{suffix}")
+    else:
+        lines.append(f"- {MANUAL_REVIEW_FLAG} - no hidden technical conditions were detected in this run.")
+    return lines
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Extract per-tender context and upload template rows from tender documents."
+    )
+    parser.add_argument("--input-dir", default="downloads", help="Directory with downloaded tender docs.")
+    parser.add_argument("--out-dir", default="task_force/out/tender_context", help="Output directory.")
+    parser.add_argument("--max-files", type=int, default=20, help="Max files to process.")
+    parser.add_argument("--tender-id", default="", help="Optional tender id filter, e.g. 09362-2025.")
     args = parser.parse_args()
 
     root = Path.cwd()
@@ -231,129 +1022,223 @@ def main() -> int:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%SZ")
     files = collect_candidates(input_dir)[: max(1, args.max_files)]
 
-    results: list[dict[str, Any]] = []
-    csv_rows: list[dict[str, str]] = []
-
+    parsed: list[ParsedFile] = []
     for path in files:
-        file_record: dict[str, Any] = {
-            "file": str(path),
-            "kind": path.suffix.lower().lstrip("."),
-            "status": "ok",
-            "hit_count": 0,
-            "hits": [],
-            "upload_hints": [],
-        }
+        kind = path.suffix.lower().lstrip(".")
         try:
             if path.suffix.lower() == ".pdf":
                 text, pages = extract_pdf_text(path)
             else:
                 text = extract_docx_text(path)
                 pages = []
-
             paragraphs = split_paragraphs(text)
             hits = find_hits(paragraphs, pages if pages else None)
-            upload_hints = build_upload_hints(hits)
+            hints = build_upload_hints(hits)
+            tender_id = detect_tender_id(path, text)
+            parsed.append(
+                ParsedFile(
+                    path=path,
+                    kind=kind,
+                    text=text,
+                    pages=pages,
+                    tender_id=tender_id,
+                    hit_count=len(hits),
+                    hits=hits[:120],
+                    upload_hints=hints[:120],
+                )
+            )
+        except Exception:
+            parsed.append(
+                ParsedFile(
+                    path=path,
+                    kind=kind,
+                    text="",
+                    pages=[],
+                    tender_id=None,
+                    hit_count=0,
+                    hits=[],
+                    upload_hints=[],
+                )
+            )
 
-            file_record["hit_count"] = len(hits)
-            file_record["hits"] = [
-                {"keyword": h.keyword, "page": h.page, "snippet": h.snippet} for h in hits[:80]
-            ]
-            file_record["upload_hints"] = upload_hints[:80]
+    grouped: dict[str, list[ParsedFile]] = {}
+    tender_docs = [
+        p
+        for p in parsed
+        if p.tender_id and "\u0442\u0435\u043d\u0434\u0435\u0440\u0441\u043a\u0430_\u0434\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u0430\u0446" in p.path.name.lower()
+    ]
+    for item in parsed:
+        if item.tender_id:
+            continue
+        is_tech_spec = "\u0442\u0435\u0445\u043d\u0438\u0447\u043a\u0430 \u0441\u043f\u0435\u0446\u0438\u0444\u0438\u043a\u0430\u0446" in item.path.name.lower()
+        if not is_tech_spec:
+            continue
+        if args.tender_id:
+            item.tender_id = args.tender_id
+            continue
+        if not tender_docs:
+            continue
+        nearest = min(
+            tender_docs,
+            key=lambda td: abs(td.path.stat().st_mtime - item.path.stat().st_mtime),
+        )
+        # Keep assignment conservative for files downloaded in the same window.
+        if abs(nearest.path.stat().st_mtime - item.path.stat().st_mtime) <= 12 * 3600:
+            item.tender_id = nearest.tender_id
 
-            for hint in upload_hints:
-                csv_rows.append(
+    for item in parsed:
+        if not item.tender_id:
+            continue
+        if args.tender_id and item.tender_id != args.tender_id:
+            continue
+        grouped.setdefault(item.tender_id, []).append(item)
+
+    outputs: list[dict[str, str]] = []
+    for tender_id, group_files in sorted(grouped.items()):
+        group_files.sort(key=lambda x: (score_filename(x.path), x.path.stat().st_mtime), reverse=True)
+        main_doc = group_files[0]
+
+        sections = extract_target_sections(main_doc.text)
+        tech_spec_hits: list[dict[str, Any]] = []
+        upload_rows: list[dict[str, str]] = []
+        file_records: list[dict[str, Any]] = []
+
+        for item in group_files:
+            is_tech_spec = "\u0442\u0435\u0445\u043d\u0438\u0447\u043a\u0430 \u0441\u043f\u0435\u0446\u0438\u0444\u0438\u043a\u0430\u0446" in item.path.name.lower()
+            if is_tech_spec:
+                tech_spec_hits.extend(item.hits[:40])
+            for hint in item.upload_hints:
+                upload_rows.append(
                     {
-                        "file": path.name,
+                        "file": item.path.name,
                         "tag": hint["tag"],
                         "term": hint["term"],
                         "source_page": hint["source_page"],
                         "snippet": hint["snippet"],
                     }
                 )
-        except Exception as exc:
-            file_record["status"] = f"error: {type(exc).__name__}: {exc}"
+            file_records.append(
+                {
+                    "file": str(item.path),
+                    "kind": item.kind,
+                    "status": "ok" if item.text else "error_or_empty",
+                    "hit_count": item.hit_count,
+                    "upload_hints": item.upload_hints,
+                }
+            )
 
-        results.append(file_record)
-
-    payload = {
-        "generated_at_utc": stamp,
-        "input_dir": str(input_dir),
-        "processed_files": len(results),
-        "pdf_reader_available": PdfReader is not None,
-        "files": results,
-    }
-
-    json_path = out_dir / f"tender_context_{stamp}.json"
-    md_path = out_dir / f"tender_context_{stamp}.md"
-    csv_path = out_dir / f"upload_hints_{stamp}.csv"
-    xlsx_path = out_dir / f"upload_hints_{stamp}.xlsx"
-    requirements_path = out_dir / f"upload_requirements_template_{stamp}.csv"
-
-    json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    # utf-8-sig keeps Cyrillic readable when opened directly in Excel on Windows.
-    with csv_path.open("w", encoding="utf-8-sig", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=["file", "tag", "term", "source_page", "snippet"])
-        writer.writeheader()
-        writer.writerows(csv_rows)
-
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "upload_hints"
-    ws.append(["file", "tag", "term", "source_page", "snippet"])
-    for row in csv_rows:
-        ws.append([row["file"], row["tag"], row["term"], row["source_page"], row["snippet"]])
-    wb.save(xlsx_path)
-
-    req_rows = build_requirements_template_rows(csv_rows)
-    with requirements_path.open("w", encoding="utf-8-sig", newline="") as fh:
-        writer = csv.DictWriter(
-            fh,
-            fieldnames=[
-                "requirement_id",
-                "source_file",
-                "category",
-                "hint_tag",
-                "requirement_text",
-                "evidence_expected",
-                "mandatory",
-                "source_pages",
-                "snippet",
-                "status",
-            ],
+        deduped_tech_spec_hits = dedupe_top_tech_spec_hits(tech_spec_hits, MAX_HIDDEN_TECH_SPEC_ITEMS)
+        context_fields = build_context_fields(
+            full_text=main_doc.text,
+            sections=sections,
+            tech_spec_hits=deduped_tech_spec_hits,
         )
-        writer.writeheader()
-        writer.writerows(req_rows)
+        payload = {
+            "generated_at_utc": stamp,
+            "tender_id": tender_id,
+            "main_source_file": str(main_doc.path),
+            "processed_files": len(group_files),
+            "pdf_reader_available": PdfReader is not None,
+            "target_sections": sections,
+            "context_fields": context_fields,
+            "confidence_summary": {
+                level: sum(1 for item in context_fields.values() if item.get("confidence") == level)
+                for level in ("high", "medium", "low")
+            },
+            "files": file_records,
+        }
 
-    lines = [
-        f"# Tender Context Pack ({stamp})",
-        "",
-        f"- Input dir: `{input_dir}`",
-        f"- Files processed: `{len(results)}`",
-        f"- PDF reader available: `{PdfReader is not None}`",
-        "",
-        "## File Summary",
-    ]
-    for item in results:
-        lines.append(
-            f"- `{Path(item['file']).name}`: status={item['status']}, hits={item['hit_count']}, upload_hints={len(item['upload_hints'])}"
+        tender_slug = tender_id.replace("-", "_")
+        json_path = out_dir / f"tender_context_{tender_slug}_{stamp}.json"
+        md_path = out_dir / f"tender_context_{tender_slug}_{stamp}.md"
+        context_docx_path = out_dir / f"tender_context_{tender_slug}_{stamp}.docx"
+        csv_path = out_dir / f"upload_hints_{tender_slug}_{stamp}.csv"
+        xlsx_path = out_dir / f"upload_hints_{tender_slug}_{stamp}.xlsx"
+        requirements_path = out_dir / f"upload_requirements_template_{tender_slug}_{stamp}.csv"
+        checklist_path = out_dir / f"simple_checklist_{tender_slug}_{stamp}.md"
+        checklist_docx_path = out_dir / f"simple_checklist_{tender_slug}_{stamp}.docx"
+        form_docx_path = out_dir / f"simple_form_{tender_slug}_{stamp}.docx"
+
+        json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        with csv_path.open("w", encoding="utf-8-sig", newline="") as fh:
+            writer = csv.DictWriter(fh, fieldnames=["file", "tag", "term", "source_page", "snippet"])
+            writer.writeheader()
+            writer.writerows(upload_rows)
+        write_upload_hints_xlsx(upload_rows, xlsx_path)
+
+        req_rows = build_requirements_template_rows(main_doc.path.name, upload_rows, sections, deduped_tech_spec_hits)
+        with requirements_path.open("w", encoding="utf-8-sig", newline="") as fh:
+            writer = csv.DictWriter(
+                fh,
+                fieldnames=[
+                    "requirement_id",
+                    "source_file",
+                    "category",
+                    "hint_tag",
+                    "section_code",
+                    "section_heading",
+                    "requirement_text",
+                    "evidence_expected",
+                    "mandatory",
+                    "source_pages",
+                    "snippet",
+                    "status",
+                ],
+            )
+            writer.writeheader()
+            writer.writerows(req_rows)
+
+        checklist_lines = build_simple_checklist_lines(
+            tender_id=tender_id,
+            main_source_file=main_doc.path.name,
+            sections=sections,
+            req_rows=req_rows,
         )
-    lines.extend(
-        [
-            "",
-            "## Next Use",
-            "- Review `upload_hints_*.csv` to map detected obligations to actual upload slots on submit-bid page.",
-            "- Review `upload_requirements_template_*.csv` generated from current upload hints (same extraction run).",
-            "- Keep all items as draft obligations until manual legal/SME confirmation.",
-        ]
-    )
-    md_path.write_text("\n".join(lines), encoding="utf-8")
+        checklist_path.write_text("\n".join(checklist_lines), encoding="utf-8")
+        write_simple_checklist_docx(checklist_lines, checklist_docx_path)
 
-    print(f"JSON: {json_path}")
-    print(f"MD:   {md_path}")
-    print(f"CSV:  {csv_path}")
-    print(f"XLSX: {xlsx_path}")
-    print(f"REQ:  {requirements_path}")
+        form_rows = build_simple_form_rows(req_rows)
+        write_simple_form_docx(form_rows, tender_id, form_docx_path)
+
+        context_lines = build_elegant_context_lines_v2(
+            tender_id=tender_id,
+            main_source_file=main_doc.path.name,
+            context_fields=context_fields,
+            tech_spec_hits=deduped_tech_spec_hits,
+        )
+        md_path.write_text("\n".join(context_lines), encoding="utf-8")
+        write_simple_checklist_docx(context_lines, context_docx_path)
+
+        outputs.append(
+            {
+                "tender_id": tender_id,
+                "json": str(json_path),
+                "md": str(md_path),
+                "context_docx": str(context_docx_path),
+                "csv": str(csv_path),
+                "xlsx": str(xlsx_path),
+                "req": str(requirements_path),
+                "checklist": str(checklist_path),
+                "checklist_docx": str(checklist_docx_path),
+                "form_docx": str(form_docx_path),
+            }
+        )
+
+    if not outputs:
+        print("No tender groups detected with tender-id signature.")
+        return 0
+
+    for item in outputs:
+        print(f"TENDER: {item['tender_id']}")
+        print(f"  JSON: {item['json']}")
+        print(f"  MD:   {item['md']}")
+        print(f"  CONTEXT DOCX: {item['context_docx']}")
+        print(f"  CSV:  {item['csv']}")
+        print(f"  XLSX: {item['xlsx']}")
+        print(f"  REQ:  {item['req']}")
+        print(f"  CHECKLIST: {item['checklist']}")
+        print(f"  CHECKLIST DOCX: {item['checklist_docx']}")
+        print(f"  FORM DOCX: {item['form_docx']}")
     return 0
 
 
