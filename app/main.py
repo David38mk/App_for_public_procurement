@@ -3,6 +3,8 @@ import json
 import os
 import random
 import re
+import subprocess
+import sys
 import threading
 import time
 import unicodedata
@@ -167,6 +169,12 @@ class TenderSearchFrame(ttk.Frame):
         btns = ttk.Frame(self)
         btns.pack(fill="x", padx=8, pady=(0, 8))
         ttk.Button(btns, text="Connect", command=self.on_connect).pack(side="left")
+        ttk.Button(btns, text="Extract Tender Context", command=self.on_extract_tender_context).pack(
+            side="left", padx=6
+        )
+        ttk.Button(btns, text="Open Latest Upload Hints", command=self.on_open_latest_upload_hints).pack(
+            side="left"
+        )
         ttk.Button(btns, text="Search", command=self.on_search).pack(side="left")
         ttk.Button(btns, text="Download selected", command=self.on_download_selected).pack(
             side="left", padx=6
@@ -258,6 +266,64 @@ class TenderSearchFrame(ttk.Frame):
                 self.log(f"ERROR: Connect failed: {exc}")
 
         threading.Thread(target=work, daemon=True).start()
+
+    def on_extract_tender_context(self):
+        script_path = Path.cwd() / "task_force" / "scripts" / "extract_tender_context.py"
+        if not script_path.exists():
+            messagebox.showerror("Missing script", f"Not found:\n{script_path}")
+            return
+
+        def work():
+            self.log("INFO: Running tender context extraction...")
+            cmd = [
+                sys.executable,
+                str(script_path),
+                "--input-dir",
+                "downloads",
+                "--out-dir",
+                "task_force/out/tender_context",
+                "--max-files",
+                "12",
+            ]
+            try:
+                result = subprocess.run(
+                    cmd,
+                    cwd=str(Path.cwd()),
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if result.stdout.strip():
+                    for line in result.stdout.strip().splitlines():
+                        self.log(f"CTX: {line}")
+                if result.returncode != 0:
+                    if result.stderr.strip():
+                        self.log(f"ERROR: {result.stderr.strip()}")
+                    messagebox.showerror("Extract failed", "Tender context extraction failed. Check logs.")
+                    return
+                self.log("INFO: Tender context extraction completed.")
+            except Exception as exc:
+                self.log(f"ERROR: Context extraction failed: {exc}")
+                messagebox.showerror("Extract failed", str(exc))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def on_open_latest_upload_hints(self):
+        out_dir = Path.cwd() / "task_force" / "out" / "tender_context"
+        files = sorted(out_dir.glob("upload_hints_*.csv"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if not files:
+            messagebox.showinfo("No hints", f"No upload hints found in:\n{out_dir}")
+            return
+        latest = files[0]
+        try:
+            if os.name == "nt":
+                os.startfile(str(latest))
+            else:
+                messagebox.showinfo("Latest hints", str(latest))
+            self.log(f"INFO: Opened upload hints: {latest.name}")
+        except Exception as exc:
+            self.log(f"ERROR: Could not open hints file: {exc}")
+            messagebox.showerror("Open failed", str(exc))
 
     @staticmethod
     def _normalize_token_text(value: str) -> str:
